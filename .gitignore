@@ -1,0 +1,15 @@
+log/
+.idea/
+.DS_Store
+
+# AI coding assistant / "vibe coding" local instructions (keep private)
+AGENTS.md
+AGENT.md
+agent.md
+CLAUDE.md
+claude.md
+CODEX.md
+codex.md
+.cursorrules
+.cursor/
+.codex/

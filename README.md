@@ -125,5 +125,4 @@ curl -X POST http://<listen>/api/rules \
 
 ## Roadmap
 
-详见 `plan.md`：计划补齐 WebUI（React/Vite）对 `/api/ws` 与规则管理的可视化支持。
-
+详见 `plan.md`：计划补齐 WebUI（位于 `web/` 目录）对 `/api/ws` 与规则管理的可视化支持。

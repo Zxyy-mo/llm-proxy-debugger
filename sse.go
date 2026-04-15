@@ -5,8 +5,8 @@ import (
 	"strconv"
 )
 
-// SSEEvent represents one dispatched Server-Sent Events message.
-// It is intentionally "够用" for debugging: we preserve parsed fields and the concatenated Data.
+// SSEEvent 表示一个已分发的 Server-Sent Events 消息。
+// 它被设计为调试“够用”：我们保留了解析出来的字段以及合并后的 Data 数据。
 type SSEEvent struct {
 	Event   string            // event:
 	Data    string            // concatenated data: lines (joined by '\n')
@@ -15,8 +15,8 @@ type SSEEvent struct {
 	Fields  map[string]string // other fields for debugging/forward-compat
 }
 
-// SSEParser incrementally parses an SSE byte stream.
-// It is line-based and robust to chunking, CRLF, multi-line data and comments.
+// SSEParser 增量解析 SSE 字节流。
+// 它是基于行的，并且能很好地针对分块、CRLF 换行、多行 data 以及注释进行鲁棒性处理。
 type SSEParser struct {
 	buf []byte
 
@@ -33,9 +33,9 @@ type SSEParser struct {
 
 func NewSSEParser() *SSEParser {
 	return &SSEParser{
-		// 2MB is plenty for normal SSE chunks; if exceeded we reset the parser state.
+		// 2MB 对于正常的 SSE 分块来说已经足够；如果超过此限制，我们将重置解析器状态。
 		maxBufferBytes: 2 * 1024 * 1024,
-		// Current-event data (concatenated data: lines). If exceeded we drop the current event.
+		// 当前事件的数据体积上限（按行拼接的 data 数据）。超过此限制将丢弃当前事件。
 		maxDataBytes: 2 * 1024 * 1024,
 	}
 }
@@ -60,14 +60,14 @@ func (p *SSEParser) appendDataLine(value []byte) {
 }
 
 func (p *SSEParser) rememberField(field string, value []byte) {
-	// Keep only one value per field for debugging; repeated fields overwrite (except data:).
+	// 为了调试目的，每个字段仅保留一个值；重复声明的字段将被覆盖（除了 data: 外）。
 	if p.curFields == nil {
 		p.curFields = make(map[string]string)
 	}
 	p.curFields[field] = string(value)
 }
 
-// Feed consumes a byte chunk and returns all fully-dispatched SSE events.
+// Feed 消费一个字节块，并返回所有已完整组装分发的 SSE 事件。
 func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 	if len(chunk) == 0 {
 		return nil
@@ -75,7 +75,7 @@ func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 
 	p.buf = append(p.buf, chunk...)
 	if p.maxBufferBytes > 0 && len(p.buf) > p.maxBufferBytes {
-		// Malformed stream or upstream bug: reset to avoid OOM.
+		// 数据流格式错误或发生上游故障：强制重置状态以避免 OOM。
 		p.buf = nil
 		p.resetEvent()
 		return nil
@@ -91,12 +91,12 @@ func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 		line := p.buf[:nl]
 		p.buf = p.buf[nl+1:]
 
-		// Handle CRLF by trimming trailing '\r'
+		// 处理 CRLF 换行，截断末尾的 '\r'
 		if len(line) > 0 && line[len(line)-1] == '\r' {
 			line = line[:len(line)-1]
 		}
 
-		// Blank line dispatches the event.
+		// 读到空行，触发事件分发。
 		if len(line) == 0 {
 			if p.hasEventData() {
 				out = append(out, SSEEvent{
@@ -111,7 +111,7 @@ func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 			continue
 		}
 
-		// Comments start with ":" and are ignored.
+		// 注释以 ":" 开头，在这里予以忽略。
 		if line[0] == ':' {
 			continue
 		}
@@ -126,7 +126,7 @@ func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 			p.curEvent = string(value)
 		case "data":
 			if p.maxDataBytes > 0 && p.dataBuf.Len()+len(value)+1 > p.maxDataBytes {
-				// Too large; drop current event and continue parsing from next dispatch boundary.
+				// 数据过大；丢弃当前事件，并从下一个分发边界继续向后解析。
 				p.resetEvent()
 				continue
 			}
@@ -148,13 +148,13 @@ func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 func splitSSEField(line []byte) (field string, value []byte) {
 	colon := bytes.IndexByte(line, ':')
 	if colon == -1 {
-		// Per spec: field name, empty value.
+		// 根据协议规范：字段名存在，但值为空。
 		return string(line), nil
 	}
 
 	field = string(line[:colon])
 	value = line[colon+1:]
-	// Optional single leading space.
+	// 剔除可选的单一前导空格。
 	if len(value) > 0 && value[0] == ' ' {
 		value = value[1:]
 	}

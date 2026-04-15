@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -11,22 +11,130 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { PlusIcon, TerminalIcon, ActivityIcon, SettingsIcon, Code2Icon, BrainCircuitIcon } from 'lucide-vue-next'
 
-const sessions = ref([
-  { id: '1', title: 'Chat with GPT-4', tokens: 12500, active: true },
-  { id: '2', title: 'Code Refactoring', tokens: 8400, active: false },
-  { id: '3', title: 'Data Analysis', tokens: 3200, active: false }
-])
+// Types
+interface Session {
+  id: string
+  trace_id: string
+  title: string
+  tokens: number
+  active: boolean
+  time: string
+  method: string
+  path: string
+}
 
-const thinkingLogs = ref([
-  { id: 1, type: 'text', content: 'Analyzing user request...' },
-  { id: 2, type: 'thinking', content: 'The user wants to fetch the latest data. I should use the web_fetch tool. I need to format the URL correctly.' },
-  { id: 3, type: 'text', content: 'Calling tool...' }
-])
+const sessions = ref<Session[]>([])
+const activeSessionId = ref<string | null>(null)
 
-const toolCalls = ref([
-  { id: 1, name: 'web_fetch', params: '{ "url": "https://example.com/api" }', status: 'success', result: '{"data": "ok"}' },
-  { id: 2, name: 'read_file', params: '{ "path": "main.go" }', status: 'pending', result: null }
-])
+// For the active session
+const thinkingContent = ref('')
+const isThinking = ref(false)
+const isRequestActive = ref(false)
+const toolCalls = ref<any[]>([])
+const consoleLogs = ref<string[]>([])
+
+let ws: WebSocket | null = null
+
+const scrollThinking = () => {
+  // Try to scroll the thinking area down if possible
+  // Normally would use a template ref, skipping for simplicity.
+}
+
+onMounted(() => {
+  ws = new WebSocket('ws://localhost:12337/api/ws')
+  
+  ws.onopen = () => {
+    consoleLogs.value.push('[System] 🟢 WebSocket connected to gateway: ws://localhost:12337/api/ws')
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data)
+      
+      if (payload.event === 'request_start') {
+        const timeStr = payload.time ? payload.time.split('T')[1].split('Z')[0] : ''
+        consoleLogs.value.push(`[${timeStr}] 🔵 Request Started: ${payload.method} ${payload.path} [Trace: ${payload.trace_id.substring(0,8)}]`)
+        
+        sessions.value.forEach(s => s.active = false)
+        sessions.value.unshift({
+          id: payload.session_id,
+          trace_id: payload.trace_id,
+          title: `${payload.method} ${payload.path}`,
+          tokens: 0,
+          active: true,
+          time: payload.time,
+          method: payload.method,
+          path: payload.path
+        })
+        activeSessionId.value = payload.session_id
+        
+        thinkingContent.value = ''
+        isThinking.value = true
+        isRequestActive.value = true
+        toolCalls.value = []
+      }
+      
+      else if (payload.event === 'sse_delta') {
+        const s = sessions.value.find(s => s.trace_id === payload.trace_id)
+        if (s && payload.metrics) {
+          s.tokens = (payload.metrics.input_tokens || 0) + (payload.metrics.output_tokens || 0)
+          
+          if (payload.metrics.thinking_content) {
+             thinkingContent.value = payload.metrics.thinking_content
+          }
+
+          if (payload.metrics.tool_use_count > toolCalls.value.length) {
+            toolCalls.value.push({
+               id: toolCalls.value.length + 1,
+               name: 'Unknown Tool',
+               params: 'Waiting for tool payload...',
+               status: 'pending'
+            })
+          }
+          isThinking.value = true
+        }
+
+        // If it's a tool_use block start from Anthropic
+        if (payload.data && payload.data.includes('"type":"tool_use"')) {
+           try {
+             const dataJson = JSON.parse(payload.data)
+             if (dataJson.type === 'tool_use' || dataJson.content_block?.type === 'tool_use') {
+                const name = dataJson.name || dataJson.content_block?.name || 'Tool'
+                // Update the last pend tool
+                if (toolCalls.value.length > 0) {
+                   toolCalls.value[toolCalls.value.length - 1].name = name
+                   toolCalls.value[toolCalls.value.length - 1].params = JSON.stringify(dataJson.input || {})
+                }
+             }
+           } catch(e) {}
+        }
+      }
+      
+      else if (payload.event === 'request_end') {
+        consoleLogs.value.push(`[System] ⚪ Request Ended: [Trace: ${payload.trace_id.substring(0,8)}] Duration: ${payload.log?.duration_ms?.toFixed(1) || 0}ms`)
+        isThinking.value = false
+        isRequestActive.value = false
+        if (toolCalls.value.length > 0) {
+           toolCalls.value.forEach(t => {
+             if (t.status === 'pending') t.status = 'success'
+           })
+        }
+      }
+    } catch(e) {
+      consoleLogs.value.push(`[System] ❌ Msg Parse Error: ${e}`)
+    }
+  }
+
+  ws.onclose = () => {
+    consoleLogs.value.push('[System] 🔴 WebSocket disconnected. Auto-retry depends on browser.')
+    isThinking.value = false
+    isRequestActive.value = false
+  }
+})
+
+onUnmounted(() => {
+  if (ws) ws.close()
+})
 </script>
 
 <template>
@@ -91,12 +199,18 @@ const toolCalls = ref([
                   </div>
                   <ScrollArea class="flex-1 p-4">
                     <div class="space-y-4">
-                      <div v-for="log in thinkingLogs" :key="log.id" 
-                           class="text-sm border-l-2 pl-3 py-1"
-                           :class="log.type === 'thinking' ? 'border-primary/50 bg-primary/5 text-primary-foreground italic' : 'border-border text-foreground'">
-                        {{ log.content }}
+                      
+                      <!-- Thinking Content Block -->
+                      <div v-if="thinkingContent" class="text-sm border-l-2 pl-3 py-1 border-primary/50 bg-primary/5 text-primary-foreground italic whitespace-pre-wrap break-words">
+                        {{ thinkingContent }}
                       </div>
-                      <div class="animate-pulse flex space-x-1 items-center h-4 text-muted-foreground pl-3">
+                      
+                      <!-- Empty State -->
+                      <div v-else-if="!isThinking && !isRequestActive" class="text-sm text-muted-foreground italic pl-3 border-l-2 border-transparent">
+                        Waiting for thinking stream...
+                      </div>
+
+                      <div v-if="isThinking" class="animate-pulse flex space-x-1 items-center h-4 text-primary pl-3 mt-4">
                         <div class="w-1.5 h-1.5 bg-current rounded-full"></div>
                         <div class="w-1.5 h-1.5 bg-current rounded-full"></div>
                         <div class="w-1.5 h-1.5 bg-current rounded-full"></div>
@@ -164,10 +278,10 @@ const toolCalls = ref([
                 <div class="flex-1 overflow-hidden">
                   <TabsContent value="terminal" class="h-full m-0 border-0 p-0 outline-none">
                     <ScrollArea class="h-full bg-black text-green-400 font-mono text-xs p-3">
-                      <div>[INFO] Gateway started on :8080</div>
-                      <div>[INFO] WebSocket hub listening for connections</div>
-                      <div class="text-blue-400">[DEBUG] New connection from 127.0.0.1:54321</div>
-                      <div class="text-blue-400">[DEBUG] Session created: 1</div>
+                      <div v-for="(log, i) in consoleLogs" :key="i" class="break-words mt-1" :class="log.includes('[System] ❌') ? 'text-red-400' : (log.includes('[System]') ? 'text-zinc-500' : 'text-green-400')">
+                        {{ log }}
+                      </div>
+                      <div v-if="consoleLogs.length === 0" class="text-zinc-600 italic">Waiting for connection...</div>
                     </ScrollArea>
                   </TabsContent>
                   <TabsContent value="rules" class="h-full m-0 border-0 p-4 outline-none">

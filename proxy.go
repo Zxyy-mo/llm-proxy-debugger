@@ -38,6 +38,7 @@ type RequestLog struct {
 	InputTokens    int               `json:"input_tokens,omitempty"`
 	OutputTokens   int               `json:"output_tokens,omitempty"`
 	ThinkingTokens int               `json:"thinking_tokens,omitempty"`
+	ThinkingContent string           `json:"thinking_content,omitempty"` // 新增
 	ToolUseCount   int               `json:"tool_use_count,omitempty"`
 	IsThinkingLoop bool              `json:"is_thinking_loop,omitempty"`
 }
@@ -213,6 +214,7 @@ func asyncLog(reqLog RequestLog) {
 			zap.Int("input", reqLog.InputTokens),
 			zap.Int("output", reqLog.OutputTokens),
 			zap.Int("thinking", reqLog.ThinkingTokens),
+			zap.String("thinking_content", truncateBody([]byte(reqLog.ThinkingContent), 500)), // 记录部分推理内容
 			zap.Int("tools", reqLog.ToolUseCount),
 			zap.Float64("duration_ms", reqLog.Duration),
 			zap.Bool("loop", reqLog.IsThinkingLoop),
@@ -232,8 +234,7 @@ func handleHTTP(w http.ResponseWriter, r *http.Request, target *url.URL, startTi
 	// 协议选择 (SRP)
 	var handler ProtocolHandler = &AnthropicHandler{}
 	if strings.Contains(r.URL.Path, "openai") || strings.Contains(r.URL.Path, "chat/completions") {
-		// 未来可以在此注入 OpenAIHandler
-		handler = &AnthropicHandler{}
+		handler = &OpenAIHandler{}
 	}
 
 	// 确保会话存在
@@ -386,11 +387,12 @@ func handleHTTP(w http.ResponseWriter, r *http.Request, target *url.URL, startTi
 		StatusCode:     recorder.statusCode,
 		Duration:       float64(duration.Milliseconds()),
 		UserAgent:      r.UserAgent(),
-		InputTokens:    recorder.accumulator.InputTokens,
-		OutputTokens:   recorder.accumulator.OutputTokens,
-		ThinkingTokens: recorder.accumulator.ThinkingTokens,
-		ToolUseCount:   recorder.accumulator.ToolUseCount,
-		IsThinkingLoop: recorder.accumulator.IsThinkingLoop,
+		InputTokens:     recorder.accumulator.InputTokens,
+		OutputTokens:    recorder.accumulator.OutputTokens,
+		ThinkingTokens:  recorder.accumulator.ThinkingTokens,
+		ThinkingContent: recorder.accumulator.ThinkingContent, // 新增
+		ToolUseCount:    recorder.accumulator.ToolUseCount,
+		IsThinkingLoop:  recorder.accumulator.IsThinkingLoop,
 	}
 
 	if recorder.isSSE {

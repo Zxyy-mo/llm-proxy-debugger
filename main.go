@@ -4,6 +4,7 @@ import (
 	"flag"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,6 +15,15 @@ func main() {
 
 	initLogger(*logDir)
 	defer logger.Sync()
+
+	// 尝试加载路由配置文件
+	if err := LoadRoutesFromFile(*routesFile); err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warn("加载路由配置文件失败", zap.String("file", *routesFile), zap.Error(err))
+		}
+	} else {
+		logger.Info("✅ 成功从配置文件加载路由映射", zap.String("file", *routesFile))
+	}
 
 	go hub.Run()
 
@@ -33,6 +43,7 @@ func main() {
 	mux.HandleFunc("/api/ws", serveWS)
 	mux.HandleFunc("/api/sessions", apiSessionsHandler)
 	mux.HandleFunc("/api/rules", apiRulesHandler)
+	mux.HandleFunc("/api/routes", apiRoutesHandler) // 添加路由配置 API
 
 	server := &http.Server{
 		Addr:         *listenAddr,

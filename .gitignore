@@ -14,3 +14,5 @@ codex.md
 .cursor/
 .codex/
 .ace-tool/
+.trellis/
+.agent/

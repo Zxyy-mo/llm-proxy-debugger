@@ -298,10 +298,29 @@ func handleHTTP(w http.ResponseWriter, r *http.Request, target *url.URL, startTi
 
 			req.Header.Del("Accept-Encoding")
 
-			// 动态规则匹配
+			// 获取动态规则和模型路由映射
 			store.RLock()
 			rules := store.Rules
+			routes := store.Routes
 			store.RUnlock()
+
+			// [新增] 动态路由解析逻辑：通过 body 里的 model 进行目标覆盖
+			if len(requestBody) > 0 && req.Method == http.MethodPost {
+				var payload map[string]interface{}
+				// 如果不能解析或者没有匹配到，使用原有的默认 target (由 flag 提供)
+				if err := json.Unmarshal(requestBody, &payload); err == nil {
+					if modelName, ok := payload["model"].(string); ok {
+						if routeTargetStr, exists := routes[modelName]; exists {
+							if routeTarget, err := url.Parse(routeTargetStr); err == nil {
+								// 使用匹配到的自定义后端覆盖代理请求
+								req.URL.Scheme = routeTarget.Scheme
+								req.URL.Host = routeTarget.Host
+								req.Host = routeTarget.Host
+							}
+						}
+					}
+				}
+			}
 
 			for _, rule := range rules {
 				if strings.Contains(req.URL.Path, rule.PathMatch) {

@@ -1,0 +1,69 @@
+package proxy
+
+import (
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+)
+
+// getClientIP 获取客户端真实 IP
+func getClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ips := strings.Split(xff, ",")
+		return strings.TrimSpace(ips[0])
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return ip
+}
+
+// truncateBody 截断过长的 body
+func truncateBody(body []byte, maxSize int) string {
+	if len(body) <= maxSize {
+		return string(body)
+	}
+	return string(body[:maxSize]) + fmt.Sprintf("... [truncated, total %d bytes]", len(body))
+}
+
+// extractHeaders 提取重要的请求头，对敏感字段脱敏
+func extractHeaders(h http.Header) map[string]string {
+	headers := make(map[string]string)
+	importantHeaders := []string{
+		"Content-Type",
+		"Authorization",
+		"X-API-Key",
+		"Accept",
+		"Origin",
+		"Referer",
+	}
+	for _, key := range importantHeaders {
+		if v := h.Get(key); v != "" {
+			if key == "Authorization" || key == "X-API-Key" {
+				if len(v) > 20 {
+					headers[key] = v[:10] + "****" + v[len(v)-6:]
+				} else {
+					headers[key] = "****"
+				}
+			} else {
+				headers[key] = v
+			}
+		}
+	}
+	return headers
+}
+
+// singleJoiningSlash 合并路径，避免双斜杠或缺失斜杠
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	}
+	return a + b
+}

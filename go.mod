@@ -1,4 +1,4 @@
-module goproxy
+module github.com/Zxyy-mo/llm-proxy-debugger
 
 go 1.24.0
 

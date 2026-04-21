@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -107,7 +108,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		}
 	}
 
-	recorder := newResponseRecorder(w, traceID, handler, s.hub, s.logger, s.cfg.MaxBodyLogSize)
+	recorder := newResponseRecorder(w, traceID, handler, s.hub, s.logger, s.cfg.MaxBodyLogSize, filepath.Join(s.cfg.LogDir, "sse"))
+	defer recorder.close()
 	target := s.target
 	var proxyErr error
 
@@ -219,7 +221,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 	}
 
 	if recorder.isSSE {
-		reqLog.ResponseBody = "[SSE Stream]"
+		reqLog.ResponseBody = truncateBody([]byte(recorder.accumulator.OutputContent), s.cfg.MaxBodyLogSize)
 	} else {
 		reqLog.ResponseBody = truncateBody(recorder.body.Bytes(), s.cfg.MaxBodyLogSize)
 	}

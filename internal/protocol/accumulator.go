@@ -10,6 +10,7 @@ type Accumulator struct {
 	OutputTokens    int       `json:"output_tokens"`
 	ThinkingTokens  int       `json:"thinking_tokens"`
 	ThinkingContent string    `json:"thinking_content"`
+	OutputContent   string    `json:"output_content"`
 	ToolUseCount    int       `json:"tool_use_count"`
 	IsThinkingLoop  bool      `json:"is_thinking_loop"`
 	StartTime       time.Time `json:"-"`
@@ -34,9 +35,18 @@ func (acc *Accumulator) Accumulate(data []byte) {
 	if metrics.InputTokens > 0 {
 		acc.InputTokens = metrics.InputTokens
 	}
-	acc.OutputTokens += metrics.OutputTokens
-	acc.ThinkingTokens += metrics.ThinkingTokens
+	if metrics.IsFinalOutputTokens {
+		acc.OutputTokens = metrics.OutputTokens
+	} else {
+		acc.OutputTokens += metrics.OutputTokens
+	}
+	if metrics.IsFinalThinkingTokens {
+		acc.ThinkingTokens = metrics.ThinkingTokens
+	} else {
+		acc.ThinkingTokens += metrics.ThinkingTokens
+	}
 	acc.ThinkingContent += metrics.ThinkingContent
+	acc.OutputContent += metrics.OutputContent
 	acc.ToolUseCount += metrics.ToolUseCount
 	if metrics.IsThinkingLoop {
 		acc.IsThinkingLoop = true

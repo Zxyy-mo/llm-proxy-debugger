@@ -14,3 +14,4 @@ codex.md
 .cursor/
 .codex/
 .ace-tool/
+.claude/*

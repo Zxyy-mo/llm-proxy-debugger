@@ -11,7 +11,12 @@
       "Bash(curl -s -X POST -H \"Content-Type: application/json\" -d '{\"path_match\":\"/v1/test\",\"body_match\":\"\",\"inject_system\":\"probe\",\"intercept\":false}' http://localhost:5174/api/rules)",
       "Bash(curl -s -X POST -H \"Content-Type: application/json\" -H \"X-Session-ID: test-session\" -d '{\"model\":\"claude\",\"messages\":[]}' http://localhost:12338/v1/messages)",
       "Bash(node -e ' *)",
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

@@ -33,8 +33,9 @@ func (h *AnthropicHandler) Parse(data []byte) (*Metrics, error) {
 		}
 	case "content_block_delta":
 		if gjson.Get(jsonStr, "delta.type").String() == "text" {
-			delta := len([]rune(gjson.Get(jsonStr, "delta.text").String()))
-			metrics.OutputTokens = delta
+			text := gjson.Get(jsonStr, "delta.text").String()
+			metrics.OutputContent = text
+			metrics.OutputTokens = len([]rune(text))
 			h.thinkingStreak = 0
 		}
 	case "content_block_start":
@@ -45,6 +46,7 @@ func (h *AnthropicHandler) Parse(data []byte) (*Metrics, error) {
 	case "message_delta":
 		if usage := gjson.Get(jsonStr, "usage"); usage.Exists() {
 			metrics.OutputTokens = int(usage.Get("output_tokens").Int())
+			metrics.IsFinalOutputTokens = true
 		}
 	}
 	return metrics, nil

@@ -3,6 +3,8 @@ package proxy
 import (
 	"bytes"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/hub"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
@@ -22,6 +24,11 @@ type responseRecorder struct {
 	hub         *hub.Hub
 	logger      *zap.Logger
 	maxBodySize int
+
+	traceID    string
+	sseDumpDir string
+	dumpFile   *os.File
+	dumpFailed bool
 }
 
 func newResponseRecorder(
@@ -31,6 +38,7 @@ func newResponseRecorder(
 	h *hub.Hub,
 	log *zap.Logger,
 	maxBodySize int,
+	sseDumpDir string,
 ) *responseRecorder {
 	return &responseRecorder{
 		ResponseWriter: w,
@@ -41,6 +49,8 @@ func newResponseRecorder(
 		hub:            h,
 		logger:         log,
 		maxBodySize:    maxBodySize,
+		traceID:        traceID,
+		sseDumpDir:     sseDumpDir,
 	}
 }
 
@@ -54,6 +64,8 @@ func (r *responseRecorder) WriteHeader(code int) {
 
 func (r *responseRecorder) Write(b []byte) (int, error) {
 	if r.isSSE {
+		r.dumpRaw(b)
+
 		events := r.sseParser.Feed(b)
 		for _, evt := range events {
 			if evt.Data == "" {
@@ -94,5 +106,42 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 func (r *responseRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
+	}
+}
+
+// dumpRaw 把上游原始 SSE 字节追加写入 {logDir}/sse/{trace_id}.log。
+// 首次写入时惰性创建文件；任何 I/O 错误仅记一次 warn 后放弃，不影响代理主路径。
+func (r *responseRecorder) dumpRaw(b []byte) {
+	if r.sseDumpDir == "" || r.dumpFailed {
+		return
+	}
+	if r.dumpFile == nil {
+		if err := os.MkdirAll(r.sseDumpDir, 0755); err != nil {
+			r.logger.Warn("❗ SSE dump mkdir 失败",
+				zap.String("trace_id", r.traceID), zap.Error(err))
+			r.dumpFailed = true
+			return
+		}
+		path := filepath.Join(r.sseDumpDir, r.traceID+".log")
+		f, err := os.Create(path)
+		if err != nil {
+			r.logger.Warn("❗ SSE dump 文件创建失败",
+				zap.String("trace_id", r.traceID), zap.Error(err))
+			r.dumpFailed = true
+			return
+		}
+		r.dumpFile = f
+	}
+	if _, err := r.dumpFile.Write(b); err != nil {
+		r.logger.Warn("❗ SSE dump 写入失败",
+			zap.String("trace_id", r.traceID), zap.Error(err))
+		r.dumpFailed = true
+	}
+}
+
+func (r *responseRecorder) close() {
+	if r.dumpFile != nil {
+		_ = r.dumpFile.Close()
+		r.dumpFile = nil
 	}
 }

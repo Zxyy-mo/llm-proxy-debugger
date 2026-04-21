@@ -2,10 +2,15 @@ package protocol
 
 import "github.com/tidwall/gjson"
 
-// OpenAIHandler 适配 OpenAI 协议（支持 o1/o3-mini 的 reasoning_content）
+// OpenAIHandler 适配 OpenAI 协议
+// 思考字段按优先级匹配：
+//   - reasoning_content: OpenAI 官方 / DeepSeek 等
+//   - reasoning: Qwen3 / 部分 vLLM 部署
 type OpenAIHandler struct{}
 
 func (h *OpenAIHandler) Name() string { return "openai" }
+
+var reasoningFieldCandidates = []string{"reasoning_content", "reasoning"}
 
 func (h *OpenAIHandler) Parse(data []byte) (*Metrics, error) {
 	if len(data) == 0 {
@@ -18,22 +23,32 @@ func (h *OpenAIHandler) Parse(data []byte) (*Metrics, error) {
 		usage := gjson.Get(jsonStr, "usage")
 		if usage.Exists() {
 			return &Metrics{
-				InputTokens:    int(usage.Get("prompt_tokens").Int()),
-				OutputTokens:   int(usage.Get("completion_tokens").Int()),
-				ThinkingTokens: int(usage.Get("completion_tokens_details.reasoning_tokens").Int()),
+				InputTokens:           int(usage.Get("prompt_tokens").Int()),
+				OutputTokens:          int(usage.Get("completion_tokens").Int()),
+				ThinkingTokens:        int(usage.Get("completion_tokens_details.reasoning_tokens").Int()),
+				IsFinalOutputTokens:   true,
+				IsFinalThinkingTokens: true,
 			}, nil
 		}
 		return nil, nil
 	}
 
 	metrics := &Metrics{}
-	if content := delta.Get("content"); content.Exists() {
-		metrics.OutputTokens = len([]rune(content.String()))
+	if content := delta.Get("content"); content.Type == gjson.String {
+		s := content.String()
+		metrics.OutputContent = s
+		metrics.OutputTokens = len([]rune(s))
 	}
-	if reasoning := delta.Get("reasoning_content"); reasoning.Exists() {
-		content := reasoning.String()
-		metrics.ThinkingContent = content
-		metrics.ThinkingTokens = len([]rune(content))
+	// 遇到 null / 缺失都会跳过，继续尝试下一个候选字段
+	for _, key := range reasoningFieldCandidates {
+		r := delta.Get(key)
+		if r.Type != gjson.String {
+			continue
+		}
+		s := r.String()
+		metrics.ThinkingContent = s
+		metrics.ThinkingTokens = len([]rune(s))
+		break
 	}
 
 	return metrics, nil

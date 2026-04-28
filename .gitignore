@@ -2,7 +2,18 @@ log/
 .idea/
 .DS_Store
 
-# AI coding assistant / "vibe coding" local instructions (keep private)
+# Local build outputs
+goproxy
+goproxy-*
+*.exe
+
+# Local notes and scratch docs
+Refactor.md
+refactor.md
+plan.md
+antigravity_mcp_sandbox_tutorial.md
+
+# Local editor and assistant state
 AGENTS.md
 AGENT.md
 agent.md
@@ -13,5 +24,9 @@ codex.md
 .cursorrules
 .cursor/
 .codex/
+.agent/
+.agents/
+.trellis/
 .ace-tool/
+.github/
 .claude/*

@@ -3,6 +3,7 @@ import { Handle, Position } from '@vue-flow/core'
 import { BotIcon, Link2Icon, AlertCircleIcon, WrenchIcon, RepeatIcon } from 'lucide-vue-next'
 import { formatDuration, linkLabel, warningLabel, statusLabel } from '@/lib/correlation'
 import type { GraphNode } from '@/lib/types'
+import { totalTokenLabel, tokenLabel, timing } from '@/lib/metrics'
 
 defineProps<{ data: GraphNode; selected: boolean }>()
 defineEmits<{ activate: [node: GraphNode] }>()
@@ -14,7 +15,7 @@ defineEmits<{ activate: [node: GraphNode] }>()
     role="button"
     tabindex="0"
     :class="{ 'is-selected': selected, 'is-reference': data.kind === 'reference', 'is-error': data.status === 'error', 'is-replay': Boolean(data.replay) }"
-    :aria-label="`${data.kind === 'reference' ? '父调用引用' : data.replay ? '重放调用' : '调用'}：${data.model || ''} ${data.label}`"
+    :aria-label="`${data.kind === 'reference' ? '父调用引用' : data.kind === 'tool' ? '工具调用' : data.replay ? '重放调用' : '调用'}：${data.model || ''} ${data.label}`"
     @keydown.enter.stop.prevent="$emit('activate', data)"
     @keydown.space.stop.prevent="$emit('activate', data)"
   >
@@ -28,6 +29,12 @@ defineEmits<{ activate: [node: GraphNode] }>()
       <p class="mt-3 line-clamp-2 break-all font-mono text-[11px] text-amber-950" :title="data.label">{{ data.label }}</p>
       <p class="mt-3 text-[10px] leading-relaxed text-amber-800/80">{{ data.trace_id ? '点击查看这个调用的详情' : warningLabel(data.correlation.warning) || '捕获到对应响应后自动补全' }}</p>
     </template>
+    <template v-else-if="data.kind === 'tool' && data.tool">
+      <div class="flex items-center gap-2 text-amber-800"><WrenchIcon class="h-4 w-4" /><span class="truncate text-xs font-semibold">{{ data.tool.name || data.tool.kind }}</span></div>
+      <p class="mt-3 text-xs">{{ data.tool.status === 'requested' ? '已观察到调用，等待结果' : data.tool.status === 'result_observed' ? '已观察到工具结果' : statusLabel(data.tool.status) }}</p>
+      <p class="mt-2 break-all font-mono text-[10px] text-zinc-400">{{ data.tool.call_id || data.tool.span_id }}</p>
+      <div class="mt-3 border-t pt-2 text-[10px] text-muted-foreground">{{ data.tool.source === 'trace' ? '执行 tracing' : 'API 可见记录' }} · 耗时 {{ timing(data.tool.duration_ms) }}</div>
+    </template>
     <template v-else>
       <div class="flex items-center gap-2">
         <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-700"><BotIcon class="h-3.5 w-3.5" /></span>
@@ -38,7 +45,7 @@ defineEmits<{ activate: [node: GraphNode] }>()
       <p class="mt-3 line-clamp-2 min-h-9 text-xs leading-[18px] text-zinc-700" :title="data.label">{{ data.label }}</p>
       <p class="mt-1 truncate font-mono text-[9px] text-zinc-400">{{ data.method }} {{ data.path }}</p>
       <div class="mt-3 flex items-center gap-3 border-t border-zinc-100 pt-2 text-[10px] text-zinc-500">
-        <span class="font-mono">{{ (data.input_tokens + data.output_tokens).toLocaleString() }} <span class="font-sans">tk</span></span>
+        <span class="font-mono" :title="`输入：${tokenLabel(data.token_sources?.input)}；输出：${tokenLabel(data.token_sources?.output)}`">{{ totalTokenLabel(data.input_tokens, data.output_tokens, data.token_sources) }} <span class="font-sans">tk</span></span>
         <span class="font-mono">{{ data.status === 'running' || data.status === 'pending' ? '…' : formatDuration(data.duration_ms) }}</span>
         <span v-if="data.tool_use_count" class="flex items-center gap-1"><WrenchIcon class="h-2.5 w-2.5" />{{ data.tool_use_count }}</span>
         <AlertCircleIcon v-if="data.correlation.warning" class="ml-auto h-3 w-3 text-amber-600" :aria-label="warningLabel(data.correlation.warning)" />

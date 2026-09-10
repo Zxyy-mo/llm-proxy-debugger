@@ -2,19 +2,26 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/hub"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/observation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/sse"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/store"
 	"go.uber.org/zap"
 )
 
 // responseRecorder 在代理响应的同时，记录状态码、body，并实时处理 SSE 事件。
 type responseRecorder struct {
+	tools   *observation.Collector
+	onTools func([]observation.ToolCall)
 	http.ResponseWriter
 	statusCode   int
 	body         *bytes.Buffer
@@ -33,6 +40,12 @@ type responseRecorder struct {
 	sseDumpDir string
 	dumpFile   *os.File
 	dumpFailed bool
+	response   *store.ResponseSnapshot
+	upstreamAt time.Time
+	headersAt  time.Time
+	contentAt  time.Time
+	private    bool
+	project    func([]byte) []byte
 }
 
 func newResponseRecorder(
@@ -56,6 +69,7 @@ func newResponseRecorder(
 		traceID:        traceID,
 		sseDumpDir:     sseDumpDir,
 		capture:        correlation.NewResponseCapture(handler.Name()),
+		tools:          observation.New(handler.Name()),
 	}
 }
 
@@ -72,6 +86,10 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 		r.dumpRaw(b)
 
 		events := r.sseParser.Feed(b)
+		if r.sseParser.Err() != nil {
+			r.accumulator.TokenSources = protocol.UnknownSources()
+			return r.ResponseWriter.Write(b)
+		}
 		for _, evt := range events {
 			if evt.Data == "" {
 				continue
@@ -80,15 +98,27 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 				r.onResponse(r.capture.Metadata())
 			}
 			r.accumulator.Accumulate([]byte(evt.Data))
+			r.captureTools([]byte(evt.Data))
+			r.markContent()
+			metrics, data := *r.accumulator, evt.Data
+			metrics.OutputContent = truncateBody([]byte(metrics.OutputContent), r.maxBodySize)
+			metrics.ThinkingContent = truncateBody([]byte(metrics.ThinkingContent), r.maxBodySize)
+			data = truncateBody([]byte(data), r.maxBodySize)
+			if r.private {
+				metrics.OutputContent = ""
+				metrics.ThinkingContent = ""
+				data = ""
+				evt.Fields = nil
+			}
 			r.hub.Publish(map[string]interface{}{
 				"event":      "sse_delta",
 				"trace_id":   r.accumulator.TraceID,
-				"data":       evt.Data,
+				"data":       data,
 				"sse_event":  evt.Event,
 				"sse_id":     evt.ID,
 				"sse_retry":  evt.RetryMS,
 				"sse_fields": evt.Fields,
-				"metrics":    *r.accumulator,
+				"metrics":    metrics,
 			})
 			if r.accumulator.IsThinkingLoop {
 				r.logger.Warn("⚠️ [Thinking Loop Detected]",
@@ -118,55 +148,148 @@ func (r *responseRecorder) Flush() {
 }
 
 func (r *responseRecorder) captureJSON(body []byte) {
+	saved := body
+	if r.project != nil {
+		saved = r.project(body)
+		if r.response != nil {
+			r.response.Redacted = !bytes.Equal(saved, body)
+			r.response.Representation = "redacted-json"
+		}
+	}
+	r.dumpRaw(saved)
 	r.bodyCaptured = true
 	r.body.Reset()
-	limit := len(body)
+	limit := len(saved)
 	if limit > r.maxBodySize {
 		limit = r.maxBodySize
 	}
 	if limit > 0 {
-		r.body.Write(body[:limit])
+		r.body.Write(saved[:limit])
 	}
 	r.capture.JSON(body)
 	r.accumulator.Accumulate(body)
+	r.captureTools(body)
+	r.markContent()
 	if r.onResponse != nil {
 		r.onResponse(r.capture.Metadata())
 	}
 }
 
-// dumpRaw 把上游原始 SSE 字节追加写入 {logDir}/sse/{trace_id}.log。
-// 首次写入时惰性创建文件；任何 I/O 错误仅记一次 warn 后放弃，不影响代理主路径。
+func (r *responseRecorder) captureTools(body []byte) {
+	r.tools.Feed(body)
+	if r.private && r.isSSE {
+		return
+	}
+	calls := r.tools.Calls()
+	if len(calls) > 0 && r.onTools != nil {
+		r.onTools(calls)
+	}
+}
+
+func (r *responseRecorder) beginResponse(resp *http.Response) {
+	if r.headersAt.IsZero() {
+		r.headersAt = time.Now()
+	}
+	contentType := resp.Header.Get("Content-Type")
+	typ, dir, ext := "binary", filepath.Join(filepath.Dir(r.sseDumpDir), "responses"), ".bin"
+	if r.isSSE {
+		typ, dir, ext = "sse", r.sseDumpDir, ".log"
+	} else if strings.Contains(strings.ToLower(contentType), "json") {
+		typ, ext = "json", ".json"
+	}
+	r.response = &store.ResponseSnapshot{TraceID: r.traceID, Type: typ, ContentType: contentType, ContentEncoding: resp.Header.Get("Content-Encoding"), StatusCode: resp.StatusCode, Stored: "file", Receiving: true, Path: filepath.Join(dir, r.traceID+ext)}
+	if path, err := filepath.Abs(r.response.Path); err == nil {
+		r.response.Path = path
+	}
+	if r.private && r.isSSE {
+		r.response.Stored = "missing"
+		r.response.Reason = "记录脱敏已启用，响应结束后保存脱敏输出"
+	}
+	r.dumpRaw(nil)
+}
+
+func (r *responseRecorder) markContent() {
+	if r.contentAt.IsZero() && (r.accumulator.OutputContent != "" || r.accumulator.ThinkingContent != "" || r.accumulator.ToolUseCount > 0) {
+		r.contentAt = time.Now()
+	}
+}
+
+func (r *responseRecorder) finishResponse(complete bool) *store.ResponseSnapshot {
+	if r.private && r.isSSE && r.response != nil {
+		calls := r.tools.Calls()
+		for i := range calls {
+			if !complete || calls[i].Truncated {
+				calls[i].Input = "[未完整捕获工具参数：记录脱敏策略]"
+				calls[i].Output = ""
+			}
+		}
+		if len(calls) > 0 && r.onTools != nil {
+			r.onTools(calls)
+		}
+		body, _ := json.Marshal(map[string]string{"output_content": r.accumulator.OutputContent, "thinking_content": r.accumulator.ThinkingContent})
+		r.response.Stored = "file"
+		r.response.Reason = ""
+		r.response.Type = "json"
+		r.response.ContentType = "application/json"
+		r.response.ContentEncoding = ""
+		r.response.Redacted = true
+		r.response.Representation = "redacted-output"
+		r.response.Path = strings.TrimSuffix(r.response.Path, ".log") + ".json"
+		r.private = false
+		r.dumpRaw(r.project(body))
+	}
+	r.close()
+	if r.response != nil {
+		r.response.Receiving = false
+		r.response.Complete = complete
+		if !complete && r.response.Reason == "" {
+			r.response.Reason = "响应未完整结束，保留已捕获的内容"
+		}
+	}
+	return r.response
+}
+
+// Saving never changes the bytes forwarded to the original client. Disk errors
+// are exposed in metadata instead of silently advertising a complete capture.
 func (r *responseRecorder) dumpRaw(b []byte) {
-	if r.sseDumpDir == "" || r.dumpFailed {
+	if r.private && r.isSSE {
+		return
+	}
+	if r.response == nil {
+		return
+	}
+	r.response.Bytes += int64(len(b))
+	if r.dumpFailed {
 		return
 	}
 	if r.dumpFile == nil {
-		if err := os.MkdirAll(r.sseDumpDir, 0755); err != nil {
-			r.logger.Warn("❗ SSE dump mkdir 失败",
-				zap.String("trace_id", r.traceID), zap.Error(err))
-			r.dumpFailed = true
+		if err := os.MkdirAll(filepath.Dir(r.response.Path), 0700); err != nil {
+			r.failDump(err)
 			return
 		}
-		path := filepath.Join(r.sseDumpDir, r.traceID+".log")
-		f, err := os.Create(path)
+		f, err := os.OpenFile(r.response.Path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
-			r.logger.Warn("❗ SSE dump 文件创建失败",
-				zap.String("trace_id", r.traceID), zap.Error(err))
-			r.dumpFailed = true
+			r.failDump(err)
 			return
 		}
 		r.dumpFile = f
 	}
 	if _, err := r.dumpFile.Write(b); err != nil {
-		r.logger.Warn("❗ SSE dump 写入失败",
-			zap.String("trace_id", r.traceID), zap.Error(err))
-		r.dumpFailed = true
+		r.failDump(err)
 	}
+}
+
+func (r *responseRecorder) failDump(err error) {
+	r.dumpFailed = true
+	r.response.Stored, r.response.Reason = "missing", "响应保存失败；转发不受影响"
+	r.logger.Warn("response capture failed", zap.String("trace_id", r.traceID), zap.Error(err))
 }
 
 func (r *responseRecorder) close() {
 	if r.dumpFile != nil {
-		_ = r.dumpFile.Close()
+		if err := r.dumpFile.Close(); err != nil {
+			r.failDump(err)
+		}
 		r.dumpFile = nil
 	}
 }

@@ -107,3 +107,24 @@ func TestIncompleteAndServerSideContextAreNotHistoryAnchors(t *testing.T) {
 		t.Fatal("shared system prompt became a history anchor")
 	}
 }
+
+func TestLargeIntegerValuesRemainDistinctCorrelationEvidence(t *testing.T) {
+	body := `{"tools":[{"name":"lookup","input_schema":{"type":"object","default":NUMBER}}],"messages":[{"role":"user","content":"lookup"},{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"lookup","input":{"id":NUMBER}}]}]}`
+	a := correlation.ExtractRequest(nil, "/v1/messages", []byte(strings.ReplaceAll(body, "NUMBER", "9007199254740992")), "upstream")
+	b := correlation.ExtractRequest(nil, "/v1/messages", []byte(strings.ReplaceAll(body, "NUMBER", "9007199254740993")), "upstream")
+	if a.ContextHash == b.ContextHash {
+		t.Fatal("distinct large integers in tool schemas became the same context")
+	}
+	if len(a.Messages) != 2 || len(b.Messages) != 2 || a.Messages[1] == b.Messages[1] {
+		t.Fatal("distinct large integer tool inputs became the same message")
+	}
+}
+
+func TestAPIKeyCredentialsHaveSeparateCorrelationScopes(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"same question"}]}`)
+	first := correlation.ExtractRequest(http.Header{"Api-Key": {"first-client"}}, "/v1/chat/completions", body, "upstream")
+	second := correlation.ExtractRequest(http.Header{"Api-Key": {"second-client"}}, "/v1/chat/completions", body, "upstream")
+	if first.Scope == second.Scope || first.ContextHash == second.ContextHash {
+		t.Fatal("different api-key identities share conversation evidence")
+	}
+}

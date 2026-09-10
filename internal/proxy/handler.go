@@ -3,25 +3,29 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/adapter"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/config"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/export"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/hub"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/intercept"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/observation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/provider"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/replay"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/store"
 	"github.com/google/uuid"
@@ -38,6 +42,12 @@ type Server struct {
 	cfg           *config.Config
 	interceptions *intercept.Manager
 	replays       *replay.Manager
+	providers     *provider.Manager
+	lifecycle     context.Context
+	cancel        context.CancelFunc
+	closeMu       sync.Mutex
+	closed        bool
+	websocketWG   sync.WaitGroup
 }
 
 // NewServer 解析目标地址并初始化 Server。
@@ -49,7 +59,13 @@ func NewServer(cfg *config.Config, log *zap.Logger, h *hub.Hub, s *store.Store) 
 	if err != nil {
 		return nil, fmt.Errorf("解析目标地址失败: %w", err)
 	}
-	return &Server{
+	if (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Host == "" || targetURL.User != nil || targetURL.RawQuery != "" || targetURL.Fragment != "" {
+		return nil, fmt.Errorf("target must be an http(s) base URL without credentials, query or fragment")
+	}
+	if err := s.SetCaptureRoot(cfg.LogDir); err != nil {
+		return nil, err
+	}
+	server := &Server{
 		target:        targetURL,
 		transport:     newTransport(),
 		hub:           h,
@@ -57,8 +73,25 @@ func NewServer(cfg *config.Config, log *zap.Logger, h *hub.Hub, s *store.Store) 
 		logger:        log,
 		cfg:           cfg,
 		interceptions: intercept.New(func() { h.Publish(map[string]any{"event": "interceptions_updated"}) }),
-		replays:       replay.New(func() { h.Publish(map[string]any{"event": "replays_updated"}) }),
-	}, nil
+		providers:     provider.New(),
+	}
+	server.transport.TLSClientConfig.InsecureSkipVerify = cfg.Insecure
+	server.lifecycle, server.cancel = context.WithCancel(context.Background())
+	var providerConfig provider.Config
+	if s.Setting("providers", &providerConfig) {
+		if err := server.providers.Set(providerConfig); err != nil {
+			return nil, fmt.Errorf("restore providers: %w", err)
+		}
+	}
+	server.replays = replay.New(func() {
+		s.SetSetting("replays", server.replays.Snapshot())
+		h.Publish(map[string]any{"event": "replays_updated"})
+	})
+	var saved []replay.Saved
+	if s.Setting("replays", &saved) {
+		server.replays.Restore(saved)
+	}
+	return server, nil
 }
 
 // ServeHTTP 实现 http.Handler 接口，区分 WebSocket 和普通/SSE 请求。
@@ -95,6 +128,21 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		r.Body = io.NopCloser(bytes.NewReader(requestBody))
 	}
 	input := correlation.ExtractRequest(r.Header, r.URL.Path, requestBody, s.target.String())
+	selection := s.selectProvider(input.Model)
+	if replayOpts != nil && replayOpts.Selection != nil {
+		selection = *replayOpts.Selection
+	}
+	scopeTarget := selection.Endpoints[0].BaseURL
+	input = correlation.ExtractRequest(r.Header, r.URL.Path, requestBody, scopeTarget)
+	requestPolicy := s.store.Privacy.Policy()
+	previewBody := requestBody
+	if requestPolicy.Record {
+		previewBody = s.store.Privacy.JSON(requestPolicy, input.Scope, requestBody)
+		input.Summary = correlation.ExtractRequest(r.Header, r.URL.Path, previewBody, scopeTarget).Summary
+		if !utf8.Valid(requestBody) {
+			previewBody = []byte("[非文本请求正文未展示：记录脱敏策略]")
+		}
+	}
 	var handler protocol.Handler = &protocol.AnthropicHandler{}
 	switch input.Protocol {
 	case "openai":
@@ -106,9 +154,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		Time: startTime.Format(time.RFC3339Nano), TraceID: traceID,
 		Type: "HTTP", ClientIP: clientIP, Method: r.Method, Path: r.URL.Path,
 		Query: export.RedactQuery(r.URL.RawQuery), Headers: extractHeaders(r.Header),
-		RequestBody: truncateBody(requestBody, s.cfg.MaxBodyLogSize), UserAgent: r.UserAgent(),
+		RequestBody: truncateBody(previewBody, s.cfg.MaxBodyLogSize), UserAgent: r.UserAgent(),
 		Replay: replayInfo,
-	}, input)
+	}, input, requestPolicy)
 	s.store.CaptureOriginal(traceID, snapshotRequest(r, requestBody))
 	if replayOpts != nil {
 		replayOpts.markStarted()
@@ -120,13 +168,18 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 	})
 
 	recorder := newResponseRecorder(w, traceID, handler, s.hub, s.logger, s.cfg.MaxBodyLogSize, filepath.Join(s.cfg.LogDir, "sse"))
+	policy, privacyScope := s.store.PrivacyContext(traceID)
+	if policy.Record {
+		recorder.private = true
+		recorder.project = func(body []byte) []byte { return s.store.Privacy.JSON(policy, privacyScope, body) }
+	}
 	defer recorder.close()
+	recorder.onTools = func(calls []observation.ToolCall) { s.store.ObserveTools(traceID, calls) }
 	recorder.onResponse = func(response correlation.Response) {
 		if s.store.ObserveResponse(traceID, response) {
 			s.hub.Publish(map[string]interface{}{"event": "sessions_updated"})
 		}
 	}
-	target := s.target
 	var proxyErr error
 	var upstreamStarted time.Time
 	defer func() {
@@ -137,13 +190,21 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 			panic(panicValue)
 		}
 		response := recorder.capture.Response()
+		observationErr := recorder.sseParser.Err()
 		if proxyErr == nil && response.Error != "" {
 			proxyErr = fmt.Errorf("upstream: %s", response.Error)
 		}
-		if proxyErr == nil && recorder.isSSE && response.Recognized && !response.Complete {
+		if proxyErr == nil && observationErr == nil && recorder.isSSE && response.Recognized && !response.Complete {
 			proxyErr = fmt.Errorf("SSE stream ended without a completion event")
 		}
 		log := initial
+		if observationErr != nil {
+			log.ObservationWarning = "SSE 事件超过 2 MiB 观测上限；文本、工具及指标观测不完整。响应字节继续转发，Token 与首内容时间记为未知。"
+			response.Complete = false
+			if recorder.response != nil {
+				recorder.response.ObservationWarning = log.ObservationWarning
+			}
+		}
 		log.StatusCode = recorder.statusCode
 		log.Duration = float64(time.Since(startTime).Microseconds()) / 1000
 		if !upstreamStarted.IsZero() {
@@ -154,11 +215,28 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 			log.StatusCode = status
 		}
 		log.InputTokens, log.OutputTokens = recorder.accumulator.InputTokens, recorder.accumulator.OutputTokens
-		log.ThinkingTokens, log.ThinkingContent = recorder.accumulator.ThinkingTokens, recorder.accumulator.ThinkingContent
+		log.TokenSources = recorder.accumulator.TokenSources
+		if proxyErr != nil || log.StatusCode >= 400 || observationErr != nil {
+			log.TokenSources = protocol.UnknownSources()
+		} else if response.Recognized && !recorder.contentAt.IsZero() && !upstreamStarted.IsZero() {
+			ttfb := float64(recorder.headersAt.Sub(upstreamStarted).Microseconds()) / 1000
+			ttfc := float64(recorder.contentAt.Sub(upstreamStarted).Microseconds()) / 1000
+			log.TTFB, log.TTFC = &ttfb, &ttfc
+		}
+		if saved := recorder.finishResponse(proxyErr == nil && !(observationErr != nil && policy.Record)); saved != nil {
+			s.store.CaptureResponse(traceID, *saved)
+			log.ResponseBytes, log.ResponseStored = saved.Bytes, saved.Stored
+		}
+		thinking, output := recorder.accumulator.ThinkingContent, recorder.accumulator.OutputContent
+		if policy.Record {
+			thinking = s.store.Privacy.Text(policy, privacyScope, thinking)
+			output = s.store.Privacy.Text(policy, privacyScope, output)
+		}
+		log.ThinkingTokens, log.ThinkingContent = recorder.accumulator.ThinkingTokens, truncateBody([]byte(thinking), s.cfg.MaxBodyLogSize)
 		log.ToolUseCount, log.IsThinkingLoop = recorder.accumulator.ToolUseCount, recorder.accumulator.IsThinkingLoop
 		if recorder.isSSE {
 			log.Type = "SSE"
-			log.ResponseBody = truncateBody([]byte(recorder.accumulator.OutputContent), s.cfg.MaxBodyLogSize)
+			log.ResponseBody = truncateBody([]byte(output), s.cfg.MaxBodyLogSize)
 		} else {
 			log.ResponseBody = truncateBody(recorder.body.Bytes(), s.cfg.MaxBodyLogSize)
 		}
@@ -241,37 +319,66 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		recorder.statusCode = status
 		return
 	}
+	outgoingBody = s.store.Outbound(traceID, outgoingBody)
+	if !bytes.Equal(outgoingBody, requestBody) {
+		updated := correlation.ExtractRequest(r.Header, r.URL.Path, outgoingBody, scopeTarget)
+		if policy.Record {
+			safe := s.store.Privacy.JSON(policy, privacyScope, outgoingBody)
+			updated.Summary = correlation.ExtractRequest(r.Header, r.URL.Path, safe, scopeTarget).Summary
+		}
+		s.publishLog(s.store.UpdateInput(traceID, updated))
+	}
+	s.store.ObserveToolResults(traceID, outgoingBody)
+	outgoingPath, convertedBody, conversion, conversionErr := adapter.Request(r.URL.Path, outgoingBody, selection.Endpoints[0].Protocol, selection.Model)
+	if conversionErr != nil {
+		proxyErr = conversionErr
+		writeProtocolError(recorder, input.Protocol, 422, conversionErr.Error())
+		return
+	}
+	outgoingBody = convertedBody
+	outgoingRawPath := r.URL.RawPath
+	if outgoingPath != r.URL.Path {
+		outgoingRawPath = ""
+	}
+	routeInfo := store.RouteInfo{ID: selection.RouteID, ProviderID: selection.Endpoints[0].ID, Attempts: []store.RouteAttempt{}, OriginalModel: input.Model, TargetModel: selection.Model}
+	if conversion != nil {
+		routeInfo.Conversion = input.Protocol + " → openai"
+	}
+	s.store.SetRoute(traceID, routeInfo)
 	if !bytes.Equal(outgoingBody, requestBody) {
 		r.Body = io.NopCloser(bytes.NewReader(outgoingBody))
 		r.ContentLength = int64(len(outgoingBody))
 		r.GetBody, r.TransferEncoding, r.Trailer = nil, nil, nil
 		r.Header.Del("Content-Length")
 		r.Header.Del("Transfer-Encoding")
-		s.publishLog(s.store.UpdateInput(traceID, correlation.ExtractRequest(r.Header, r.URL.Path, outgoingBody, s.target.String())))
 	}
 
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
-			req.URL.Scheme = target.Scheme
-			req.URL.Host = target.Host
-			req.Host = target.Host
-
-			if target.Path != "" && target.Path != "/" {
-				req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
-			}
-
 			req.Header.Del("Accept-Encoding")
 		},
-		Transport: captureTransport{base: s.transport, capture: func(req *http.Request) {
-			upstreamStarted = time.Now()
-			s.store.CaptureOutgoing(traceID, snapshotRequest(req, outgoingBody))
-		}},
+		Transport: routeTransport{base: s.transport, selection: selection, path: outgoingPath, rawPath: outgoingRawPath, body: outgoingBody, conversion: conversion, info: routeInfo,
+			capture: func(req *http.Request, endpoint provider.Provider) {
+				snapshot := snapshotRequest(req, outgoingBody)
+				snapshot.Forwarding.ProviderID, snapshot.Forwarding.BaseURL = endpoint.ID, endpoint.BaseURL
+				s.store.CaptureOutgoing(traceID, snapshot)
+			}, started: func() {
+				upstreamStarted = time.Now()
+				recorder.upstreamAt = upstreamStarted
+			}, update: func(info store.RouteInfo) { s.store.SetRoute(traceID, info) }, received: func(at time.Time) { recorder.headersAt = at }, upstream: func(resp *http.Response) *http.Response {
+				return s.captureConversionUpstream(traceID, resp, policy.Record)
+			}},
 		ModifyResponse: func(resp *http.Response) error {
 			contentType := resp.Header.Get("Content-Type")
 			if strings.Contains(contentType, "text/event-stream") {
 				recorder.isSSE = true
 				resp.Header.Del("Content-Length")
 			}
+			recorder.beginResponse(resp)
+			if conversion != nil {
+				recorder.response.Representation = "converted-from-openai"
+			}
+			s.store.CaptureResponse(traceID, *recorder.response)
 
 			if !recorder.isSSE && resp.Body != nil {
 				respBody, err := io.ReadAll(resp.Body)
@@ -280,10 +387,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 					return fmt.Errorf("read upstream response: %w", err)
 				}
 				decoded := respBody
-				if resp.Header.Get("Content-Encoding") == "gzip" {
+				if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
 					if reader, err := gzip.NewReader(bytes.NewReader(respBody)); err == nil {
 						if data, err := io.ReadAll(reader); err == nil {
 							decoded = data
+							recorder.response.Decoded = true
 						}
 						reader.Close()
 					}
@@ -309,6 +417,16 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 	rp.ServeHTTP(recorder, r)
 }
 
+func (s *Server) Close() {
+	s.closeMu.Lock()
+	s.closed = true
+	s.cancel()
+	s.closeMu.Unlock()
+	s.replays.Shutdown()
+	s.websocketWG.Wait()
+	s.transport.CloseIdleConnections()
+}
+
 func (s *Server) asyncLog(reqLog store.RequestLog) {
 	go func() {
 		s.logger.Info("📝 请求详情",
@@ -324,6 +442,9 @@ func (s *Server) asyncLog(reqLog store.RequestLog) {
 			zap.Int("input", reqLog.InputTokens),
 			zap.Int("output", reqLog.OutputTokens),
 			zap.Int("thinking", reqLog.ThinkingTokens),
+			zap.Any("token_sources", reqLog.TokenSources),
+			zap.Any("ttfb_ms", reqLog.TTFB),
+			zap.Any("ttfc_ms", reqLog.TTFC),
 			zap.String("thinking_content", truncateBody([]byte(reqLog.ThinkingContent), 500)),
 			zap.Int("tools", reqLog.ToolUseCount),
 			zap.Float64("duration_ms", reqLog.Duration),
@@ -333,59 +454,4 @@ func (s *Server) asyncLog(reqLog store.RequestLog) {
 			zap.String("error", reqLog.Error),
 		)
 	}()
-}
-
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	clientIP := getClientIP(r)
-	startTime := time.Now()
-	targetHost := s.target.Host
-
-	targetConn, err := net.DialTimeout("tcp", targetHost, 30*time.Second)
-	if err != nil {
-		s.logger.Error("❌ [WebSocket] 连接目标失败", zap.Error(err))
-		http.Error(w, "无法连接到目标服务器", http.StatusBadGateway)
-		return
-	}
-	defer targetConn.Close()
-
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "不支持 WebSocket", http.StatusInternalServerError)
-		return
-	}
-
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
-		return
-	}
-	defer clientConn.Close()
-
-	upgradeReq := buildUpgradeRequest(r, s.target)
-	targetConn.Write([]byte(upgradeReq)) //nolint:errcheck
-
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(targetConn, clientConn); done <- struct{}{} }() //nolint:errcheck
-	go func() { io.Copy(clientConn, targetConn); done <- struct{}{} }() //nolint:errcheck
-	<-done
-
-	duration := time.Since(startTime)
-	fmt.Printf("🔌 [WebSocket] %s closed (%dms)\n", clientIP, duration.Milliseconds())
-}
-
-// buildUpgradeRequest 构建发往上游的 WebSocket 升级请求报文
-func buildUpgradeRequest(r *http.Request, target *url.URL) string {
-	var builder strings.Builder
-	path := r.URL.Path
-	if r.URL.RawQuery != "" {
-		path += "?" + r.URL.RawQuery
-	}
-	builder.WriteString(r.Method + " " + path + " HTTP/1.1\r\n")
-	builder.WriteString("Host: " + target.Host + "\r\n")
-	for key, values := range r.Header {
-		for _, value := range values {
-			builder.WriteString(key + ": " + value + "\r\n")
-		}
-	}
-	builder.WriteString("\r\n")
-	return builder.String()
 }

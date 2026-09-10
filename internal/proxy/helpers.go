@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
 // getClientIP 获取客户端真实 IP
@@ -25,7 +26,11 @@ func truncateBody(body []byte, maxSize int) string {
 	if len(body) <= maxSize {
 		return string(body)
 	}
-	return string(body[:maxSize]) + fmt.Sprintf("... [truncated, total %d bytes]", len(body))
+	end := maxSize
+	for end > 0 && end < len(body) && !utf8.RuneStart(body[end]) {
+		end--
+	}
+	return string(body[:end]) + fmt.Sprintf("... [truncated, total %d bytes]", len(body))
 }
 
 // extractHeaders 提取重要的请求头，对敏感字段脱敏
@@ -50,11 +55,7 @@ func extractHeaders(h http.Header) map[string]string {
 	for _, key := range importantHeaders {
 		if v := h.Get(key); v != "" {
 			if key == "Authorization" || key == "X-API-Key" {
-				if len(v) > 20 {
-					headers[key] = v[:10] + "****" + v[len(v)-6:]
-				} else {
-					headers[key] = "****"
-				}
+				headers[key] = "****"
 			} else {
 				headers[key] = v
 			}

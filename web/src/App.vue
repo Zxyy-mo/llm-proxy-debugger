@@ -25,6 +25,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import RequestInspector from '@/components/RequestInspector.vue'
 import InterceptionPanel from '@/components/InterceptionPanel.vue'
 import RequestAudit from '@/components/RequestAudit.vue'
+import ResponsePanel from '@/components/ResponsePanel.vue'
+import GatewaySettings from '@/components/GatewaySettings.vue'
+import RoutingDetails from '@/components/RoutingDetails.vue'
+import { formatTokens, totalTokenLabel, timing } from '@/lib/metrics'
 import {
   PlusIcon,
   TerminalIcon,
@@ -70,7 +74,7 @@ const activeLogTraceId = ref<string | null>(typeof saved.trace === 'string' ? sa
 const rules = ref<Rule[]>([])
 const consoleLogs = ref<string[]>([])
 const wsStatus = ref<'connecting' | 'open' | 'closed'>('connecting')
-const activeView = ref<'graph' | 'details' | 'intercept' | 'audit'>(saved.view === 'details' || saved.view === 'intercept' || saved.view === 'audit' ? saved.view : 'graph')
+const activeView = ref<'graph' | 'details' | 'intercept' | 'audit' | 'manage'>(saved.view === 'details' || saved.view === 'intercept' || saved.view === 'audit' || saved.view === 'manage' ? saved.view : 'graph')
 const graphScope = ref<'session' | 'all'>(saved.scope === 'all' ? 'all' : 'session')
 const graphRefreshKey = ref(0)
 const pendingRefreshKey = ref(0)
@@ -209,6 +213,7 @@ async function refreshSessions() {
           patch.input_tokens = current.input_tokens
           patch.output_tokens = current.output_tokens
           patch.thinking_tokens = current.thinking_tokens
+          patch.token_sources = current.token_sources
           patch.thinking_content = current.thinking_content
           patch.response_body = current.response_body
           patch.tool_use_count = current.tool_use_count
@@ -301,6 +306,7 @@ function handleWsEvent(payload: WSEvent) {
       input_tokens: m.input_tokens,
       output_tokens: m.output_tokens,
       thinking_tokens: m.thinking_tokens,
+      token_sources: m.token_sources,
       thinking_content: m.thinking_content,
       response_body: m.output_content,
       type: 'SSE',
@@ -381,6 +387,11 @@ function toggleUtilities() {
   utilitiesPanel.value?.resize(utilitiesExpanded.value ? 20 : 55)
 }
 
+function openHistoricalLog(log: RequestLog) {
+  upsertLog(log.session_id, log.trace_id, toLiveLog(log))
+  selectTrace(log.trace_id, 'details')
+}
+
 function toggleRuleForm() {
   showRuleForm.value = !showRuleForm.value
   if (showRuleForm.value && !utilitiesExpanded.value) utilitiesPanel.value?.resize(55)
@@ -391,9 +402,9 @@ function toggleInspector() {
   else showInspector.value = !showInspector.value
 }
 
-function totalTokens(log: LiveLog | null): number {
-  if (!log) return 0
-  return (log.input_tokens ?? 0) + (log.output_tokens ?? 0)
+function totalTokens(log: LiveLog | null): string {
+  if (!log) return '未知'
+  return totalTokenLabel(log.input_tokens, log.output_tokens, log.token_sources)
 }
 
 onMounted(async () => {
@@ -431,6 +442,7 @@ const showRuleForm = ref(false)
 const editingRuleId = ref<string | null>(null)
 const ruleError = ref('')
 const ruleDraft = reactive<Omit<Rule, 'id'>>({
+  priority: 0,
   path_match: '',
   body_match: '',
   inject_system: '',
@@ -442,6 +454,7 @@ const ruleDraft = reactive<Omit<Rule, 'id'>>({
 const submitting = ref(false)
 
 function resetRuleDraft() {
+  ruleDraft.priority = 0
   ruleDraft.path_match = ''
   ruleDraft.body_match = ''
   ruleDraft.inject_system = ''
@@ -648,13 +661,14 @@ async function submitRule() {
                 <Button :variant="activeView === 'audit' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'audit'" @click="activeView = 'audit'">
                   <DiffIcon class="h-3.5 w-3.5" />原始 / 出站
                 </Button>
+                <Button :variant="activeView === 'manage' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'manage'" @click="activeView = 'manage'"><SettingsIcon class="h-3.5 w-3.5" />管理</Button>
                 <select v-if="activeView === 'graph'" v-model="graphScope" aria-label="调用图范围" class="ml-auto h-7 rounded-md border bg-background px-2 text-[11px]">
                   <option value="session">当前会话</option>
                   <option value="all">全部会话</option>
                 </select>
                 <Button v-if="activeView === 'graph'" variant="ghost" size="icon" class="h-7 w-7 shrink-0" aria-label="切换调用详情" title="显示或收起调用详情" @click="toggleInspector"><PanelRightIcon class="h-3.5 w-3.5" /></Button>
               </div>
-              <div v-if="narrowLayout && activeView !== 'intercept'" class="flex shrink-0 items-center gap-2 border-b bg-card px-3 py-2">
+              <div v-if="narrowLayout && activeView !== 'intercept' && activeView !== 'manage'" class="flex shrink-0 items-center gap-2 border-b bg-card px-3 py-2">
                 <label for="active-request" class="shrink-0 text-[11px] text-muted-foreground">当前请求</label>
                 <select id="active-request" class="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs" :value="activeLogTraceId ?? ''" @change="changeMobileLog">
                   <option v-if="!activeSession?.logs.length" value="">暂无请求</option>
@@ -681,9 +695,9 @@ async function submitRule() {
                       <h2 class="text-sm font-medium">Thinking Stream</h2>
                     </div>
                     <div v-if="activeLog" class="flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
-                      <Badge variant="secondary" class="h-4 text-[10px] px-1">in {{ activeLog.input_tokens ?? 0 }}</Badge>
-                      <Badge variant="secondary" class="h-4 text-[10px] px-1">out {{ activeLog.output_tokens ?? 0 }}</Badge>
-                      <Badge variant="secondary" class="h-4 text-[10px] px-1">think {{ activeLog.thinking_tokens ?? 0 }}</Badge>
+                      <Badge variant="secondary" class="h-4 text-[10px] px-1">in {{ formatTokens(activeLog.input_tokens, activeLog.token_sources?.input) }}</Badge>
+                      <Badge variant="secondary" class="h-4 text-[10px] px-1">out {{ formatTokens(activeLog.output_tokens, activeLog.token_sources?.output) }}</Badge>
+                      <Badge variant="secondary" class="h-4 text-[10px] px-1">think {{ formatTokens(activeLog.thinking_tokens, activeLog.token_sources?.thinking) }}</Badge>
                       <Badge v-if="activeLog.is_thinking_loop" variant="destructive" class="h-4 text-[10px] px-1">loop!</Badge>
                     </div>
                   </div>
@@ -735,10 +749,9 @@ async function submitRule() {
                         <div class="text-zinc-500 mb-1">Request</div>
                         <pre class="text-blue-300 break-words whitespace-pre-wrap">{{ formatBody(activeLog.request_body) || '(empty)' }}</pre>
                       </div>
-                      <div class="rounded-md border border-zinc-800 bg-zinc-900/50 p-3">
-                        <div class="text-zinc-500 mb-1">Response</div>
-                        <pre class="text-zinc-300 break-words whitespace-pre-wrap">{{ formatBody(activeLog.response_body) || (activeLog.status === 'running' ? '(streaming...)' : '(empty)') }}</pre>
-                      </div>
+                      <div class="flex flex-wrap gap-3 text-[11px] text-zinc-300"><span>首字节 {{ timing(activeLog.ttfb_ms) }}</span><span>首内容 {{ timing(activeLog.ttfc_ms) }}</span></div>
+                      <ResponsePanel :trace-id="activeLog.trace_id" :status="activeLog.status" />
+                      <RoutingDetails :log="activeLog" />
                       <div v-if="activeLog.error" class="rounded-md border border-red-800 bg-red-950/40 p-3">
                         <div class="text-red-400 mb-1">Error</div>
                         <pre class="text-red-300 break-words whitespace-pre-wrap">{{ activeLog.error }}</pre>
@@ -748,7 +761,8 @@ async function submitRule() {
                 </ResizablePanel>
               </ResizablePanelGroup>
               <InterceptionPanel v-show="activeView === 'intercept'" :active="activeView === 'intercept'" :refresh-key="pendingRefreshKey" :connected="wsStatus === 'open'" @select="selectPendingRequest" />
-              <RequestAudit v-if="activeView === 'audit'" :trace-id="activeLogTraceId" :refresh-key="graphRefreshKey" :replay-refresh-key="replayRefreshKey" @select="trace => selectTrace(trace, 'details')" />
+              <RequestAudit v-if="activeView === 'audit'" :trace-id="activeLogTraceId" :logs="allLogs" :refresh-key="graphRefreshKey" :replay-refresh-key="replayRefreshKey" @select="trace => selectTrace(trace, 'details')" />
+              <GatewaySettings v-if="activeView === 'manage'" @select="openHistoricalLog" />
             </ResizablePanel>
 
             <ResizableHandle with-handle />
@@ -794,7 +808,7 @@ async function submitRule() {
                   <TabsContent value="rules" class="panel-scroll h-full m-0 border-0 p-0 outline-none" aria-label="动态规则">
                     <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b bg-card">
                       <span class="text-[11px] text-muted-foreground">
-                        按顺序注入；首条匹配的拦截规则决定等待策略
+                        优先级高的先执行，同级按创建顺序；首条拦截规则决定等待策略
                       </span>
                       <Button size="sm" variant="outline" @click="toggleRuleForm">
                         <component :is="showRuleForm ? ChevronUpIcon : PlusIcon" class="h-3.5 w-3.5 mr-1" />
@@ -814,8 +828,9 @@ async function submitRule() {
                       </div>
                       <div class="space-y-1 sm:col-span-2">
                         <Label for="rule-system" class="text-xs">inject_system</Label>
-                        <Textarea id="rule-system" v-model="ruleDraft.inject_system" rows="2" placeholder="追加到请求 system 字段的文本" />
+                        <Textarea id="rule-system" v-model="ruleDraft.inject_system" rows="2" placeholder="自动按协议追加到 system、系统消息或 instructions" />
                       </div>
+                      <div class="space-y-1"><Label for="rule-priority" class="text-xs">优先级（越大越先执行）</Label><Input id="rule-priority" v-model.number="ruleDraft.priority" type="number" min="-100000" max="100000" step="1" /></div>
                       <div class="flex flex-wrap items-center gap-2 sm:col-span-2">
                         <Switch v-model="ruleDraft.intercept" id="intercept" />
                         <Label for="intercept" class="min-w-0 flex-1 text-xs">拦截请求，等待编辑或放行</Label>
@@ -834,6 +849,7 @@ async function submitRule() {
                         <TableHeader>
                           <TableRow>
                             <TableHead class="h-8 text-xs">path_match</TableHead>
+                            <TableHead class="h-8 text-xs">优先级</TableHead>
                             <TableHead class="h-8 text-xs">body_match</TableHead>
                             <TableHead class="h-8 text-xs">inject_system</TableHead>
                             <TableHead class="h-8 text-xs">拦截</TableHead>
@@ -842,8 +858,9 @@ async function submitRule() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          <TableRow v-for="r in rules" :key="r.id">
+                          <TableRow v-for="r in [...rules].sort((a, b) => b.priority - a.priority)" :key="r.id">
                             <TableCell class="text-xs font-mono py-2">{{ r.path_match || '—' }}</TableCell>
+                            <TableCell class="text-xs font-mono py-2">{{ r.priority }}</TableCell>
                             <TableCell class="text-xs font-mono py-2 max-w-40 truncate" :title="r.body_match">{{ r.body_match || '—' }}</TableCell>
                             <TableCell class="text-xs py-2 max-w-60 truncate" :title="r.inject_system">{{ r.inject_system || '—' }}</TableCell>
                             <TableCell class="py-2">
@@ -869,7 +886,7 @@ async function submitRule() {
                             </TableCell>
                           </TableRow>
                           <TableRow v-if="!rules.length">
-                            <TableCell colspan="6" class="text-xs text-muted-foreground italic text-center py-4">
+                            <TableCell colspan="7" class="text-xs text-muted-foreground italic text-center py-4">
                               No active dynamic rules configured.
                             </TableCell>
                           </TableRow>

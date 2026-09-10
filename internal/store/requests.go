@@ -22,13 +22,16 @@ type Credential struct {
 // Forwarding keeps what a faithful reproduction needs beyond the display
 // snapshot: the destination the request was addressed to and every forwardable
 // header with all of its values, minus credentials and hop-by-hop headers. It
-// is process-local and never serialized to API clients.
+// is persisted with the capture but never serialized to API clients.
 type Forwarding struct {
-	Scheme  string
-	Host    string
-	Path    string
-	Query   string // raw query with secret parameters removed
-	Headers http.Header
+	ProviderID string
+	BaseURL    string
+	Scheme     string
+	Host       string
+	Path       string
+	RawPath    string
+	Query      string // raw query with secret parameters removed
+	Headers    http.Header
 }
 
 // RequestSnapshot is captured before display truncation. Headers are already
@@ -42,6 +45,10 @@ type RequestSnapshot struct {
 	BodyEncoding  string            `json:"body_encoding,omitempty"`
 	Credentials   []Credential      `json:"credentials,omitempty"`
 	Forwarding    *Forwarding       `json:"-"`
+	FilePath      string            `json:"-"`
+	Unavailable   string            `json:"unavailable,omitempty"`
+	Redacted      bool              `json:"redacted,omitempty"`
+	RawRetained   bool              `json:"raw_retained,omitempty"`
 }
 
 type RequestCapture struct {
@@ -74,7 +81,12 @@ func (s *Store) CaptureOriginal(traceID string, snapshot RequestSnapshot) {
 	s.Lock()
 	defer s.Unlock()
 	if rec := s.records[traceID]; rec != nil {
+		if rec.privacy.Record && !rec.privacy.RetainRaw {
+			snapshot = s.projectSnapshot(snapshot, rec.privacy, rec.input.Scope)
+		}
+		snapshot = s.stashSnapshot(traceID, "original", snapshot)
 		rec.capture = &RequestCapture{TraceID: traceID, Original: copySnapshot(snapshot)}
+		s.changed()
 	}
 }
 
@@ -82,8 +94,13 @@ func (s *Store) CaptureOutgoing(traceID string, snapshot RequestSnapshot) {
 	s.Lock()
 	defer s.Unlock()
 	if rec := s.records[traceID]; rec != nil && rec.capture != nil {
+		if rec.privacy.Record && !rec.privacy.RetainRaw {
+			snapshot = s.projectSnapshot(snapshot, rec.privacy, rec.input.Scope)
+		}
+		snapshot = s.stashSnapshot(traceID, "outgoing", snapshot)
 		outgoing := copySnapshot(snapshot)
 		rec.capture.Outgoing = &outgoing
+		s.changed()
 	}
 }
 
@@ -95,9 +112,9 @@ func (s *Store) RequestSnapshot(traceID string) (RequestCapture, bool) {
 		return RequestCapture{}, false
 	}
 	capture := *rec.capture
-	capture.Original = copySnapshot(capture.Original)
+	capture.Original = s.loadSnapshot(capture.Original)
 	if capture.Outgoing != nil {
-		outgoing := copySnapshot(*capture.Outgoing)
+		outgoing := s.loadSnapshot(*capture.Outgoing)
 		capture.Outgoing = &outgoing
 	}
 	return capture, true
@@ -111,7 +128,7 @@ func (s *Store) Log(traceID string) (RequestLog, bool) {
 	if rec == nil {
 		return RequestLog{}, false
 	}
-	return copyLog(rec.log), true
+	return s.displayLog(rec), true
 }
 
 func (s *Store) SetInterception(traceID string, metadata intercept.Metadata) RequestLog {
@@ -129,7 +146,7 @@ func (s *Store) SetInterception(traceID string, metadata intercept.Metadata) Req
 		rec.log.Status = "running"
 	}
 	s.touch(rec)
-	return copyLog(rec.log)
+	return s.displayLog(rec)
 }
 
 func (s *Store) MarkCanceled(traceID string) {
@@ -154,5 +171,5 @@ func (s *Store) RequestsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "request not found")
 		return
 	}
-	json.NewEncoder(w).Encode(capture)
+	json.NewEncoder(w).Encode(s.DisplayCapture(capture.TraceID, capture))
 }

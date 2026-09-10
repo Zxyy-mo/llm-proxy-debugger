@@ -1,26 +1,35 @@
 package store
 
+import (
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/observation"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
+)
+
 // GraphNode is a compact projection, without request bodies, headers or thinking
 // content. Inspectors obtain those fields from the session's authoritative log.
 type GraphNode struct {
-	ID           string      `json:"id"`
-	Kind         string      `json:"kind"`
-	TraceID      string      `json:"trace_id,omitempty"`
-	SessionID    string      `json:"session_id,omitempty"`
-	Label        string      `json:"label"`
-	Time         string      `json:"time,omitempty"`
-	Model        string      `json:"model,omitempty"`
-	Protocol     string      `json:"protocol,omitempty"`
-	Method       string      `json:"method,omitempty"`
-	Path         string      `json:"path,omitempty"`
-	Status       string      `json:"status"`
-	StatusCode   int         `json:"status_code,omitempty"`
-	Duration     float64     `json:"duration_ms"`
-	InputTokens  int         `json:"input_tokens"`
-	OutputTokens int         `json:"output_tokens"`
-	ToolUseCount int         `json:"tool_use_count"`
-	Correlation  Correlation `json:"correlation"`
-	Replay       *ReplayInfo `json:"replay,omitempty"`
+	Tool         *observation.ToolCall `json:"tool,omitempty"`
+	ID           string                `json:"id"`
+	Kind         string                `json:"kind"`
+	TraceID      string                `json:"trace_id,omitempty"`
+	SessionID    string                `json:"session_id,omitempty"`
+	Label        string                `json:"label"`
+	Time         string                `json:"time,omitempty"`
+	Model        string                `json:"model,omitempty"`
+	Protocol     string                `json:"protocol,omitempty"`
+	Method       string                `json:"method,omitempty"`
+	Path         string                `json:"path,omitempty"`
+	Status       string                `json:"status"`
+	StatusCode   int                   `json:"status_code,omitempty"`
+	Duration     float64               `json:"duration_ms"`
+	InputTokens  int                   `json:"input_tokens"`
+	OutputTokens int                   `json:"output_tokens"`
+	ToolUseCount int                   `json:"tool_use_count"`
+	Correlation  Correlation           `json:"correlation"`
+	Replay       *ReplayInfo           `json:"replay,omitempty"`
+	TokenSources protocol.TokenSources `json:"token_sources"`
+	TTFB         *float64              `json:"ttfb_ms,omitempty"`
+	TTFC         *float64              `json:"ttfc_ms,omitempty"`
 }
 
 // GraphEdge kinds are parent evidence (parent_trace_id, previous_response_id,
@@ -42,6 +51,7 @@ type Graph struct {
 }
 
 func graphNode(log RequestLog) GraphNode {
+	log = copyLog(log)
 	label := log.Summary
 	if label == "" {
 		label = log.Method + " " + log.Path
@@ -52,6 +62,7 @@ func graphNode(log RequestLog) GraphNode {
 		Method: log.Method, Path: log.Path, Status: log.Status, StatusCode: log.StatusCode,
 		Duration: log.Duration, InputTokens: log.InputTokens, OutputTokens: log.OutputTokens,
 		ToolUseCount: log.ToolUseCount, Correlation: log.Correlation,
+		TokenSources: log.TokenSources, TTFB: log.TTFB, TTFC: log.TTFC,
 	}
 	if log.Replay != nil {
 		replay := *log.Replay
@@ -73,7 +84,7 @@ func (s *Store) GraphSnapshot(sessionID string) (Graph, bool) {
 		}
 		selected = append(selected, rec)
 		visible[rec.log.TraceID] = true
-		graph.Nodes = append(graph.Nodes, graphNode(rec.log))
+		graph.Nodes = append(graph.Nodes, graphNode(s.displayLog(rec)))
 	}
 	if sessionID != "" && len(selected) == 0 {
 		return graph, false
@@ -85,7 +96,7 @@ func (s *Store) GraphSnapshot(sessionID string) (Graph, bool) {
 		}
 		node := fallback
 		if other := s.records[id]; other != nil {
-			node = graphNode(other.log)
+			node = graphNode(s.displayLog(other))
 		}
 		node.Kind = "reference"
 		graph.Nodes = append(graph.Nodes, node)
@@ -117,6 +128,27 @@ func (s *Store) GraphSnapshot(sessionID string) (Graph, bool) {
 			ID:     rec.log.Replay.Of + ":replay:" + rec.log.TraceID,
 			Source: rec.log.Replay.Of, Target: rec.log.TraceID, Kind: "replay", Confidence: "exact",
 		})
+	}
+	for _, rec := range selected {
+		for _, call := range s.displayLog(rec).Tools {
+			compact := call
+			compact.Input, compact.Output, compact.Error = "", "", ""
+			status := "pending"
+			switch call.Status {
+			case "running":
+				status = "running"
+			case "done", "result_observed":
+				status = "done"
+			case "error":
+				status = "error"
+			}
+			id := toolNodeID(rec.log.TraceID, call.ID)
+			graph.Nodes = append(graph.Nodes, GraphNode{ID: id, Kind: "tool", TraceID: rec.log.TraceID, SessionID: rec.log.SessionID, Label: call.Name, Status: status, Tool: &compact, TokenSources: protocol.UnknownSources()})
+			graph.Edges = append(graph.Edges, GraphEdge{ID: rec.log.TraceID + ":" + id, Source: rec.log.TraceID, Target: id, Kind: "tool", Confidence: "exact"})
+			if call.ResultTrace != "" && visible[call.ResultTrace] {
+				graph.Edges = append(graph.Edges, GraphEdge{ID: id + ":" + call.ResultTrace, Source: id, Target: call.ResultTrace, Kind: "tool_result", Confidence: "exact"})
+			}
+		}
 	}
 	return graph, true
 }

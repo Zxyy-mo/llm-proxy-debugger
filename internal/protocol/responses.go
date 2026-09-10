@@ -62,6 +62,13 @@ func responseMetrics(metrics *Metrics, response gjson.Result) {
 	}
 	usage := response.Get("usage")
 	metrics.InputTokens = int(usage.Get("input_tokens").Int())
+	metrics.IsFinalInputTokens = usage.Get("input_tokens").Exists()
+	if metrics.IsFinalContent {
+		metrics.OutputTokens = len([]rune(metrics.OutputContent))
+	}
+	if metrics.IsFinalThinkingContent {
+		metrics.ThinkingTokens = len([]rune(metrics.ThinkingContent))
+	}
 	if value := usage.Get("output_tokens"); value.Exists() {
 		metrics.OutputTokens = int(value.Int())
 		metrics.IsFinalOutputTokens = true

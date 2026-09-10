@@ -5,6 +5,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatBody, formatDuration, linkLabel, sourceLabel, warningLabel, statusLabel } from '@/lib/correlation'
 import type { LiveLog } from '@/lib/types'
+import { formatTokens, timing } from '@/lib/metrics'
+import ResponsePanel from './ResponsePanel.vue'
+import ResponseComparison from './ResponseComparison.vue'
+import ToolDetails from './ToolDetails.vue'
+import RoutingDetails from './RoutingDetails.vue'
 
 const props = defineProps<{ log: LiveLog | null }>()
 const emit = defineEmits<{ select: [trace: string] }>()
@@ -47,17 +52,21 @@ const identifiers = computed(() => {
 
       <div class="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border">
         <div v-for="metric in [
-          ['输入 tokens', (log.input_tokens ?? 0).toLocaleString()],
-          ['输出 tokens', (log.output_tokens ?? 0).toLocaleString()],
+          ['输入 tokens', formatTokens(log.input_tokens, log.token_sources?.input)],
+          ['输出 tokens', formatTokens(log.output_tokens, log.token_sources?.output)],
           ['总耗时', log.status === 'running' || log.status === 'pending' ? statusLabel(log.status) : formatDuration(log.duration_ms)],
           ['工具调用', String(log.tool_use_count ?? 0)],
           ['人工 / 规则等待', log.status === 'pending' ? '等待中' : formatDuration(log.wait_duration_ms ?? 0)],
           ['上游耗时', log.status === 'running' ? '进行中' : formatDuration(log.upstream_duration_ms ?? 0)],
+          ['上游首字节', timing(log.ttfb_ms)],
+          ['首有效内容', timing(log.ttfc_ms)],
         ]" :key="metric[0]" class="bg-card p-3">
           <div class="text-[10px] text-muted-foreground">{{ metric[0] }}</div>
           <div class="mt-1 font-mono text-sm font-medium">{{ metric[1] }}</div>
         </div>
       </div>
+
+      <p v-if="log.observation_warning" role="status" class="rounded-lg bg-amber-50 p-3 leading-relaxed text-amber-900">{{ log.observation_warning }}</p>
 
       <section v-if="log.replay" class="space-y-2 rounded-lg border border-violet-200 bg-violet-50/60 p-3" aria-label="重放来源">
         <div class="flex items-center gap-1.5 font-semibold text-violet-900"><RepeatIcon class="h-3.5 w-3.5" />操作者重放</div>
@@ -96,14 +105,17 @@ const identifiers = computed(() => {
       <details v-if="log.thinking_content" class="group rounded-lg border" open>
         <summary class="flex cursor-pointer items-center gap-2 p-3 font-semibold">
           <BrainCircuitIcon class="h-3.5 w-3.5 text-violet-600" /> 已返回的思考内容
-          <span class="ml-auto font-mono font-normal text-muted-foreground">{{ log.thinking_tokens ?? 0 }} tk</span>
+          <span class="ml-auto font-mono font-normal text-muted-foreground">{{ formatTokens(log.thinking_tokens, log.token_sources?.thinking) }}</span>
         </summary>
         <pre class="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t bg-violet-50/40 p-3 text-[11px] leading-relaxed text-violet-950">{{ log.thinking_content }}</pre>
       </details>
 
-      <details class="rounded-lg border" open>
-        <summary class="cursor-pointer p-3 font-semibold">响应正文</summary>
-        <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-words border-t bg-muted/30 p-3 font-mono text-[11px] leading-relaxed">{{ formatBody(log.response_body) || (log.status === 'running' ? '等待响应…' : '无响应正文') }}</pre>
+      <ToolDetails :tools="log.tools ?? []" @select="trace => emit('select', trace)" />
+      <RoutingDetails :log="log" />
+      <ResponsePanel :trace-id="log.trace_id" :status="log.status" />
+      <details v-if="log.replay" class="rounded-lg border">
+        <summary class="cursor-pointer p-3 font-semibold">对比来源响应</summary>
+        <ResponseComparison :source-trace="log.replay.of" :replay-trace="log.trace_id" :status="log.status" />
       </details>
       <details class="rounded-lg border">
         <summary class="cursor-pointer p-3 font-semibold">请求报文</summary>

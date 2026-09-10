@@ -20,6 +20,7 @@ import (
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/export"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/intercept"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/provider"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/replay"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/store"
 	"github.com/google/uuid"
@@ -39,6 +40,7 @@ type replayOptions struct {
 	TraceID   string
 	Info      store.ReplayInfo
 	SkipRules bool
+	Selection *provider.Selection
 	Timeout   time.Duration
 	started   chan struct{}
 	once      sync.Once
@@ -108,6 +110,7 @@ type replayPlan struct {
 	timeout     time.Duration
 	missing     []string
 	fingerprint string
+	selection   *provider.Selection
 }
 
 type replayError struct {
@@ -169,6 +172,12 @@ func (s *Server) planReplay(req replayRequest, requireCredentials bool) (*replay
 	default:
 		return nil, rejectReplay(http.StatusBadRequest, "source must be original or outgoing")
 	}
+	if snapshot.Unavailable != "" {
+		return nil, rejectReplay(422, "%s", snapshot.Unavailable)
+	}
+	if snapshot.Redacted && !snapshot.RawRetained && req.Body == nil {
+		return nil, rejectReplay(422, "原文未保留，无法精确重放；请提供完整的新正文")
+	}
 	forwarding := snapshot.Forwarding
 	if forwarding == nil {
 		return nil, rejectReplay(http.StatusUnprocessableEntity, "this capture lacks forwarding metadata and cannot be replayed")
@@ -184,20 +193,40 @@ func (s *Server) planReplay(req replayRequest, requireCredentials bool) (*replay
 		timeout = defaultReplayTimeout * time.Second
 	}
 
-	path := forwarding.Path
+	path, rawPath := forwarding.Path, forwarding.RawPath
+	var selection *provider.Selection
 	if source == "outgoing" {
-		if forwarding.Scheme != s.target.Scheme || forwarding.Host != s.target.Host {
-			return nil, rejectReplay(http.StatusConflict, "the captured upstream %s://%s differs from the configured target %s://%s; refusing to replay to a different destination", forwarding.Scheme, forwarding.Host, s.target.Scheme, s.target.Host)
+		endpoint := provider.Provider{BaseURL: s.target.String(), Protocol: "passthrough"}
+		if forwarding.ProviderID != "" {
+			var ok bool
+			endpoint, ok = s.providers.Get(forwarding.ProviderID)
+			if !ok {
+				return nil, rejectReplay(409, "captured Provider %s no longer exists", forwarding.ProviderID)
+			}
 		}
-		if prefix := strings.TrimSuffix(s.target.Path, "/"); prefix != "" {
+		target, _ := url.Parse(endpoint.BaseURL)
+		if forwarding.Scheme != target.Scheme || forwarding.Host != target.Host || (forwarding.BaseURL != "" && strings.TrimSuffix(forwarding.BaseURL, "/") != strings.TrimSuffix(endpoint.BaseURL, "/")) {
+			return nil, rejectReplay(409, "the captured upstream %s://%s differs from its current provider configuration; refusing to replay to a different destination", forwarding.Scheme, forwarding.Host)
+		}
+		if prefix := strings.TrimSuffix(target.Path, "/"); prefix != "" {
 			if path != prefix && !strings.HasPrefix(path, prefix+"/") {
 				return nil, rejectReplay(http.StatusConflict, "the captured upstream path %q does not start with the configured prefix %q", path, prefix)
 			}
+			escaped := (&url.URL{Path: path, RawPath: rawPath}).EscapedPath()
+			escapedPrefix := strings.TrimSuffix(target.EscapedPath(), "/")
+			if escaped != escapedPrefix && !strings.HasPrefix(escaped, escapedPrefix+"/") {
+				return nil, rejectReplay(http.StatusConflict, "the captured escaped path does not match the configured upstream prefix")
+			}
+			rawPath = strings.TrimPrefix(escaped, escapedPrefix)
 			path = strings.TrimPrefix(path, prefix)
 			if path == "" {
-				path = "/"
+				path, rawPath = "/", "/"
 			}
 		}
+		// This body is already in the destination's wire protocol. Keep its
+		// exact path/model and never apply the provider's conversion again.
+		endpoint.Protocol = "passthrough"
+		selection = &provider.Selection{Endpoints: []provider.Provider{endpoint}}
 	}
 
 	body, err := export.BodyBytes(snapshot)
@@ -233,9 +262,16 @@ func (s *Server) planReplay(req replayRequest, requireCredentials bool) (*replay
 			header.Set(name, value)
 		}
 	}
+	if selection == nil {
+		chosen := s.selectProvider(correlation.ExtractRequest(header, path, body, s.target.String()).Model)
+		selection = &chosen
+	}
 
 	required := make(map[string]store.Credential)
 	for _, credential := range snapshot.Credentials {
+		if selection.Endpoints[0].KeyEnv != "" && credential.Kind == "header" && (strings.EqualFold(credential.Name, "Authorization") || strings.EqualFold(credential.Name, "X-API-Key") || strings.EqualFold(credential.Name, "api-key")) {
+			continue
+		}
 		required[credential.Kind+"\x00"+strings.ToLower(credential.Name)] = credential
 	}
 	supplied := make(map[string]bool)
@@ -297,12 +333,13 @@ func (s *Server) planReplay(req replayRequest, requireCredentials bool) (*replay
 		bodyMarker = candidateBody
 	}
 	plan := &replayPlan{
-		traceID: uuid.New().String(), method: snapshot.Method,
-		url:  &url.URL{Path: path, RawQuery: strings.Join(query, "&")},
+		selection: selection,
+		traceID:   uuid.New().String(), method: snapshot.Method,
+		url:  &url.URL{Path: path, RawPath: rawPath, RawQuery: strings.Join(query, "&")},
 		host: forwarding.Host, header: header, body: body,
 		info:      store.ReplayInfo{Of: req.TraceID, Source: source, Modified: modified},
 		skipRules: source == "outgoing", timeout: timeout, missing: missing,
-		fingerprint: correlation.Hash(req.TraceID, source, bodyMarker, string(editedHeaders), strings.Join(names, ","), strconv.Itoa(int(timeout/time.Second))),
+		fingerprint: correlation.Hash(req.TraceID, source, bodyMarker, string(editedHeaders), strings.Join(names, ","), strconv.Itoa(int(timeout/time.Second)), selection.Endpoints[0].BaseURL, selection.Endpoints[0].ID, selection.RouteID),
 	}
 	return plan, nil
 }
@@ -384,7 +421,7 @@ func (s *Server) createReplay(w http.ResponseWriter, r *http.Request) {
 		replayFailure(w, err)
 		return
 	}
-	opts := &replayOptions{TraceID: plan.traceID, Info: plan.info, SkipRules: plan.skipRules, Timeout: plan.timeout, started: make(chan struct{})}
+	opts := &replayOptions{TraceID: plan.traceID, Info: plan.info, SkipRules: plan.skipRules, Selection: plan.selection, Timeout: plan.timeout, started: make(chan struct{})}
 	opts.Info.ID = uuid.New().String()
 	record := replay.Record{ID: opts.Info.ID, TraceID: plan.traceID, Of: plan.info.Of, Source: plan.info.Source, Modified: plan.info.Modified}
 	record, created, err := s.replays.Start(req.IdempotencyKey, plan.fingerprint, record, plan.timeout, func(ctx context.Context) replay.Outcome {
@@ -509,6 +546,7 @@ func (s *Server) RequestsHandler(w http.ResponseWriter, r *http.Request) {
 		replayJSON(w, http.StatusNotFound, map[string]string{"error": "request not found"})
 		return
 	}
+	capture = s.store.DisplayCapture(trace, capture)
 	source := r.URL.Query().Get("source")
 	if source == "" {
 		source = "original"
@@ -538,6 +576,9 @@ func (s *Server) RequestsHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			replayJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 			return
+		}
+		if snapshot.Redacted {
+			result.Notes = append(result.Notes, "正文包含脱敏占位符，与原始字节不同；发送前请按需还原或编辑。")
 		}
 		replayJSON(w, http.StatusOK, result)
 	case "body":

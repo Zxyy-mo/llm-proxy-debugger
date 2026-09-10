@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/observation"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/privacy"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
 )
 
 func referenceKey(scope, kind, id string) string {
@@ -25,10 +28,30 @@ func addIndex(index map[string]map[string]bool, key, traceID string) {
 func (s *Store) touch(rec *record) {
 	s.revision++
 	rec.log.Revision = s.revision
+	s.changed()
 }
 
 func copyLog(log RequestLog) RequestLog {
+	if log.WebSocket != nil {
+		info := *log.WebSocket
+		log.WebSocket = &info
+	}
 	log.Headers = maps.Clone(log.Headers)
+	log.Tools = append([]observation.ToolCall(nil), log.Tools...)
+	for i := range log.Tools {
+		if log.Tools[i].Duration != nil {
+			value := *log.Tools[i].Duration
+			log.Tools[i].Duration = &value
+		}
+	}
+	if log.TTFB != nil {
+		value := *log.TTFB
+		log.TTFB = &value
+	}
+	if log.TTFC != nil {
+		value := *log.TTFC
+		log.TTFC = &value
+	}
 	if log.Interception != nil {
 		metadata := *log.Interception
 		log.Interception = &metadata
@@ -36,6 +59,11 @@ func copyLog(log RequestLog) RequestLog {
 	if log.Replay != nil {
 		replay := *log.Replay
 		log.Replay = &replay
+	}
+	if log.Route != nil {
+		route := *log.Route
+		route.Attempts = append([]RouteAttempt(nil), route.Attempts...)
+		log.Route = &route
 	}
 	return log
 }
@@ -76,12 +104,12 @@ func (s *Store) UpdateInput(traceID string, input correlation.Request) RequestLo
 		}
 	}
 	s.touch(rec)
-	return copyLog(rec.log)
+	return s.displayLog(rec)
 }
 
 // Begin records a request before forwarding it. Running requests therefore
 // survive a browser reload and can already act as explicit trace parents.
-func (s *Store) Begin(log RequestLog, input correlation.Request) RequestLog {
+func (s *Store) Begin(log RequestLog, input correlation.Request, frozen ...privacy.Policy) RequestLog {
 	s.Lock()
 	defer s.Unlock()
 	if existing := s.records[log.TraceID]; existing != nil {
@@ -92,6 +120,8 @@ func (s *Store) Begin(log RequestLog, input correlation.Request) RequestLog {
 	}
 	log.Model, log.Protocol, log.Summary = input.Model, input.Protocol, input.Summary
 	log.Status = "running"
+	log.TokenSources = protocol.UnknownSources()
+	log.ResponseStored = "missing"
 	log.Correlation = Correlation{SessionSource: "new", PreviousResponseID: input.PreviousResponseID}
 	log.SessionID = "auto:" + log.TraceID
 	for _, id := range input.Identities {
@@ -136,10 +166,18 @@ func (s *Store) Begin(log RequestLog, input correlation.Request) RequestLog {
 	}
 	s.sequence++
 	rec := &record{
-		log: copyLog(log), input: input, sequence: s.sequence,
+		log: copyLog(log), input: input, sequence: s.sequence, privacy: s.Privacy.Policy(),
 		fixedSession: len(input.Identities) > 0, preferredSession: log.SessionID,
 	}
+	if len(frozen) > 0 {
+		rec.privacy = frozen[0]
+	}
 	s.records[log.TraceID] = rec
+	if rec.privacy.Record && !rec.privacy.RetainRaw {
+		rec.log = s.displayLog(rec)
+		rec.input.Summary = rec.log.Summary
+		label = s.Privacy.Text(rec.privacy, rec.input.Scope, label)
+	}
 	s.ensureSession(rec, label)
 	s.touch(rec)
 	for _, id := range input.Identities {
@@ -164,7 +202,7 @@ func (s *Store) Begin(log RequestLog, input correlation.Request) RequestLog {
 	key := referenceKey(input.Scope, "trace", log.TraceID)
 	addIndex(s.owners, key, log.TraceID)
 	s.resolveWaiters(key)
-	return copyLog(rec.log)
+	return s.displayLog(rec)
 }
 
 func (s *Store) identitySession(scope string, identity correlation.Identity) string {
@@ -326,7 +364,7 @@ func (s *Store) observeResponse(rec *record, response correlation.Response) {
 	c := &rec.log.Correlation
 	if response.ID != "" && c.ResponseID != response.ID {
 		path := strings.TrimSuffix(rec.log.Path, "/")
-		producesResponse := rec.log.Method == http.MethodPost &&
+		producesResponse := (rec.log.Method == http.MethodPost || rec.log.Method == "WS") &&
 			(strings.HasSuffix(path, "/responses") || strings.HasSuffix(path, "/chat/completions") || strings.HasSuffix(path, "/messages"))
 		if producesResponse && c.ResponseID != "" {
 			old := referenceKey(rec.input.Scope, "response", c.ResponseID)
@@ -376,6 +414,8 @@ func (s *Store) Complete(traceID string, log RequestLog, response correlation.Re
 	log.Model, log.Protocol, log.Summary = rec.log.Model, rec.log.Protocol, rec.log.Summary
 	log.Interception, log.WaitDuration = rec.log.Interception, rec.log.WaitDuration
 	log.Replay = rec.log.Replay
+	log.Tools = rec.log.Tools
+	log.Route = rec.log.Route
 	log.Status = "done"
 	if rec.log.Status == "canceled" {
 		log.Status = "canceled"
@@ -383,6 +423,9 @@ func (s *Store) Complete(traceID string, log RequestLog, response correlation.Re
 		log.Status = "error"
 	}
 	rec.log = copyLog(log)
+	if rec.privacy.Record && !rec.privacy.RetainRaw {
+		rec.log = s.displayLog(rec)
+	}
 	s.touch(rec)
 	s.observeResponse(rec, response)
 	if log.Status == "done" {
@@ -393,7 +436,7 @@ func (s *Store) Complete(traceID string, log RequestLog, response correlation.Re
 	// Completed requests only need one transcript index entry; retaining every
 	// replayed prefix here would grow quadratically across a long conversation.
 	rec.input.Messages = nil
-	return copyLog(rec.log)
+	return s.displayLog(rec)
 }
 
 func (s *Store) orderedRecords() []*record {
@@ -413,10 +456,13 @@ func (s *Store) SessionsSnapshot() map[string]*Session {
 		id := rec.log.SessionID
 		if result[id] == nil {
 			session := *s.sessions[id]
+			if rec.privacy.Record {
+				session.Label = s.Privacy.Text(rec.privacy, rec.input.Scope, session.Label)
+			}
 			session.Logs = make([]RequestLog, 0)
 			result[id] = &session
 		}
-		result[id].Logs = append(result[id].Logs, copyLog(rec.log))
+		result[id].Logs = append(result[id].Logs, s.displayLog(rec))
 	}
 	return result
 }

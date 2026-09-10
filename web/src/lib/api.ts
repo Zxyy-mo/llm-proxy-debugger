@@ -1,4 +1,5 @@
-import type { CallGraph, CurlExport, Interception, InterceptionEdit, InterceptionSummary, ReplayRecord, ReplayRequest, ReplaySource, ReplayValidation, RequestCapture, Rule, Session, WSEvent } from './types'
+import type { CallGraph, CurlExport, Interception, InterceptionEdit, InterceptionSummary, ReplayRecord, ReplayRequest, ReplaySource, ReplayValidation, RequestCapture, ResponseSnapshot, Rule, Session, WSEvent } from './types'
+import type { ContextDifference } from './types'
 
 export class APIError extends Error {
   readonly status: number
@@ -8,7 +9,7 @@ export class APIError extends Error {
   }
 }
 
-async function requestJSON<T>(url: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function requestJSON<T>(url: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, {
     method, signal, cache: 'no-store',
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -66,6 +67,18 @@ export function editInterception(trace: string, action: 'save' | 'validate' | 'r
 
 export function fetchRequestCapture(trace: string, signal?: AbortSignal): Promise<RequestCapture> {
   return requestJSON(`/api/requests/${encodeURIComponent(trace)}`, 'GET', undefined, signal)
+}
+
+export function fetchResponse(trace: string, signal?: AbortSignal, variant = 'client'): Promise<ResponseSnapshot> {
+  return requestJSON(`/api/responses/${encodeURIComponent(trace)}?limit=2097152&variant=${variant}`, 'GET', undefined, signal)
+}
+
+export function responseDownloadUrl(trace: string, variant = 'client'): string {
+  return `/api/responses/${encodeURIComponent(trace)}/download?variant=${variant}`
+}
+
+export function fetchContextDiff(trace: string, base: string, signal?: AbortSignal): Promise<ContextDifference> {
+  return requestJSON(`/api/context-diff/${encodeURIComponent(trace)}?${new URLSearchParams({ base })}`, 'GET', undefined, signal)
 }
 
 export function fetchCurlExport(trace: string, source: ReplaySource, signal?: AbortSignal): Promise<CurlExport> {

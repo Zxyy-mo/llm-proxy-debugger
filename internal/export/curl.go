@@ -56,6 +56,9 @@ var (
 
 // BodyBytes returns the exact captured bytes, decoding base64 snapshots.
 func BodyBytes(snapshot store.RequestSnapshot) ([]byte, error) {
+	if snapshot.Unavailable != "" {
+		return nil, fmt.Errorf("%s", snapshot.Unavailable)
+	}
 	if snapshot.BodyEncoding == "base64" {
 		return base64.StdEncoding.DecodeString(snapshot.Body)
 	}
@@ -185,7 +188,7 @@ func Build(traceID, source string, snapshot store.RequestSnapshot, opts Options)
 	if host == "" {
 		return Export{}, errors.New("the capture has no destination host")
 	}
-	base := url.URL{Scheme: forwarding.Scheme, Host: host, Path: forwarding.Path, RawQuery: forwarding.Query}
+	base := url.URL{Scheme: forwarding.Scheme, Host: host, Path: forwarding.Path, RawPath: forwarding.RawPath, RawQuery: forwarding.Query}
 	result.Destination.URL = base.String()
 
 	used := make(map[string]bool)

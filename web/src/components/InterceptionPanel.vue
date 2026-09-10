@@ -175,6 +175,7 @@ function formatDraft() {
 function outcome(item: Interception): string {
   if (item.state === 'pending') return remaining.value ? '等待处理' : '等待时间已到，正在同步结果…'
   if (item.reason === 'client_disconnected') return '客户端已断开，请求已取消'
+  if (item.reason === 'gateway_restarted') return '网关已重启，请求已中断'
   if (item.reason === 'timeout') return item.state === 'released' ? '已到期转发' : '已到期取消'
   return item.state === 'released' ? '已放行' : '已取消'
 }

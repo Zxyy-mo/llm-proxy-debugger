@@ -44,11 +44,13 @@ let generation = 0
 let refreshAgain = false
 
 function liveNode(node: GraphNode): GraphNode {
+  if (node.kind === 'tool') return node
   const log = node.trace_id ? liveLogs.value.get(node.trace_id) : undefined
   if (!log || (['done', 'error', 'canceled'].includes(node.status) && ['running', 'pending'].includes(log.status))) return node
   return {
     ...node, status: log.status, status_code: log.status_code, model: log.model || node.model,
     input_tokens: log.input_tokens ?? 0, output_tokens: log.output_tokens ?? 0,
+    token_sources: log.token_sources, ttfb_ms: log.ttfb_ms, ttfc_ms: log.ttfc_ms,
     duration_ms: log.duration_ms, tool_use_count: log.tool_use_count ?? 0,
   }
 }
@@ -87,11 +89,11 @@ function applyGraph(data: GraphData) {
   }
   edges.value = data.edges.map((edge): Edge => {
     // Replay edges are operator provenance, not conversation causality.
-    const color = edge.kind === 'replay' ? '#8b5cf6' : edge.confidence === 'inferred' ? '#569ac2' : '#689c91'
+    const color = edge.kind === 'tool' || edge.kind === 'tool_result' ? '#b7791f' : edge.kind === 'replay' ? '#8b5cf6' : edge.confidence === 'inferred' ? '#569ac2' : '#689c91'
     const dash = edge.kind === 'replay' ? '2 4' : edge.confidence === 'inferred' ? '6 4' : undefined
     return {
       ...edge,
-      type: 'default', label: linkLabel(edge.kind),
+      type: 'default', label: edge.kind === 'tool' ? '工具调用' : edge.kind === 'tool_result' ? '工具结果' : linkLabel(edge.kind),
       markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
       style: { stroke: color, strokeWidth: 1.6, strokeDasharray: dash },
       labelStyle: { fill: edge.kind === 'replay' ? '#6d28d9' : edge.confidence === 'inferred' ? '#397796' : '#4b756b', fontSize: 10 },

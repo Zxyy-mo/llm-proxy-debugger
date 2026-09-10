@@ -1,4 +1,31 @@
+export type TokenSource = 'usage' | 'estimated' | 'unknown'
+export interface TokenSources { input: TokenSource; output: TokenSource; thinking: TokenSource }
+
+export interface ResponseSnapshot {
+  trace_id: string
+  type: 'json' | 'sse' | 'binary' | 'websocket'
+  content_type: string
+  content_encoding?: string
+  decoded: boolean
+  status_code: number
+  bytes: number
+  stored: 'file' | 'missing'
+  complete: boolean
+  receiving: boolean
+  reason?: string
+  observation_warning?: string
+  body: string
+  body_encoding?: 'base64'
+  truncated?: boolean
+  redacted?: boolean
+  representation?: string
+  variant?: 'upstream' | 'client'
+}
+
 export interface RequestLog {
+  route?: RouteInfo
+  websocket?: { connection_id: string; stream_id: string; event_id?: string; frames: number; received_bytes: number }
+  tools?: ToolCall[]
   time: string
   trace_id: string
   session_id: string
@@ -14,6 +41,7 @@ export interface RequestLog {
   duration_ms: number
   user_agent: string
   error?: string
+  observation_warning?: string
   input_tokens?: number
   output_tokens?: number
   thinking_tokens?: number
@@ -30,6 +58,12 @@ export interface RequestLog {
   replay?: ReplayInfo
   wait_duration_ms?: number
   upstream_duration_ms?: number
+  token_sources?: TokenSources
+  ttfb_ms?: number
+  ttfc_ms?: number
+  response_bytes?: number
+  response_stored?: 'file' | 'missing'
+  privacy?: { recorded: boolean; outbound: boolean; raw_retained: boolean }
 }
 
 // Provenance of an operator replay. It never stands in for parent evidence.
@@ -66,7 +100,8 @@ export type LiveSession = Omit<Session, 'logs'> & { logs: LiveLog[] }
 
 export interface GraphNode {
   id: string
-  kind: 'request' | 'reference'
+  kind: 'request' | 'reference' | 'tool'
+  tool?: ToolCall
   trace_id?: string
   session_id?: string
   label: string
@@ -83,13 +118,16 @@ export interface GraphNode {
   tool_use_count: number
   correlation: Correlation
   replay?: ReplayInfo
+  token_sources?: TokenSources
+  ttfb_ms?: number
+  ttfc_ms?: number
 }
 
 export interface GraphEdge {
   id: string
   source: string
   target: string
-  kind: 'parent_trace_id' | 'previous_response_id' | 'history' | 'replay'
+  kind: 'parent_trace_id' | 'previous_response_id' | 'history' | 'replay' | 'tool' | 'tool_result'
   confidence: 'exact' | 'inferred'
 }
 
@@ -102,6 +140,7 @@ export interface CallGraph {
 
 export interface Rule {
   id: string
+  priority: number
   path_match: string
   body_match: string
   inject_system: string
@@ -111,10 +150,76 @@ export interface Rule {
   timeout_action: 'forward' | 'cancel'
 }
 
+export interface Provider {
+  id: string
+  name: string
+  base_url: string
+  protocol: 'passthrough' | 'openai'
+  key_env?: string
+  auth_header?: string
+  auth_scheme?: string
+  history: boolean
+  websocket: boolean
+}
+export interface ProviderRoute {
+  id: string
+  model: string
+  provider_id: string
+  target_model?: string
+  priority: number
+  disabled: boolean
+  failover?: string[]
+}
+export interface ProviderConfig { providers: Provider[]; routes: ProviderRoute[] }
+export interface RouteInfo {
+  id?: string
+  provider_id?: string
+  original_model?: string
+  target_model?: string
+  conversion?: string
+  attempts: { provider_id?: string; url: string; status_code?: number; duration_ms: number; error?: string }[]
+}
+
+export interface ToolCall {
+  id: string
+  call_id: string
+  name: string
+  kind: string
+  input: string
+  output?: string
+  status: 'requested' | 'result_observed' | 'running' | 'done' | 'error'
+  source: 'llm' | 'provider' | 'trace'
+  result_trace?: string
+  span_id?: string
+  started_at?: string
+  ended_at?: string
+  duration_ms?: number
+  truncated?: boolean
+  error?: string
+}
+
+export interface ContextDifference {
+  trace_id: string
+  base_trace_id: string
+  selected_by: 'parent' | 'manual'
+  source: 'original' | 'outgoing'
+  base_source: 'original' | 'outgoing'
+  diff: {
+    messages: { kind: 'added' | 'removed' | 'unchanged'; before_index?: number; after_index?: number; content: string }[]
+    system: { changed: boolean; before: string; after: string }
+    tools: { changed: boolean; before: string; after: string }
+    added: number
+    removed: number
+    unchanged: number
+    limited: boolean
+    remote_context: boolean
+  }
+}
+
 export interface InterceptionMetadata {
   rule_id: string
   state: 'pending' | 'released' | 'canceled'
-  reason?: 'manual' | 'timeout' | 'client_disconnected'
+  reason?: 'manual' | 'timeout' | 'client_disconnected' | 'gateway_restarted'
   revision: number
   started_at: string
   deadline: string
@@ -163,6 +268,9 @@ export interface RequestSnapshot {
   content_length: number
   body_encoding?: 'base64'
   credentials?: Credential[]
+  redacted?: boolean
+  raw_retained?: boolean
+  unavailable?: string
 }
 
 export interface RequestCapture {
@@ -225,7 +333,7 @@ export interface ReplayRecord {
   source: ReplaySource
   modified: boolean
   state: 'running' | 'done' | 'error' | 'canceled'
-  reason?: 'manual' | 'timeout'
+  reason?: 'manual' | 'timeout' | 'gateway_restarted'
   error?: string
   status_code?: number
   created_at: string
@@ -243,6 +351,7 @@ export interface AccumulatorMetrics {
   output_content: string
   tool_use_count: number
   is_thinking_loop: boolean
+  token_sources: TokenSources
 }
 
 export interface WSRequestStart {

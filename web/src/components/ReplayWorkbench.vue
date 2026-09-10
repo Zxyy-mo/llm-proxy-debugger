@@ -9,6 +9,7 @@ import { APIError, cancelReplay, createReplay, fetchReplay, fetchReplays, valida
 import { formatBody, formatDuration, replayStateLabel } from '@/lib/correlation'
 import type { Credential, ReplayCredential, ReplayRecord, ReplayRequest, ReplaySource, RequestSnapshot } from '@/lib/types'
 import RequestDiff from './RequestDiff.vue'
+import ResponseComparison from './ResponseComparison.vue'
 
 const props = defineProps<{ traceId: string; source: ReplaySource; snapshot: RequestSnapshot; refreshKey: number }>()
 const emit = defineEmits<{ select: [trace: string] }>()
@@ -26,13 +27,18 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const current = ref<ReplayRecord | null>(null)
+const comparison = ref<ReplayRecord | null>(null)
 const history = ref<ReplayRecord[]>([])
 let poll: ReturnType<typeof setTimeout> | undefined
 let controller: AbortController | undefined
 let disposed = false
+const requiredCredentialNames = ref<string[] | null>(null)
+const resolvingCredentials = ref(false)
+let requirementsController: AbortController | undefined
+let requirementsTimer: ReturnType<typeof setTimeout> | undefined
 
 const encoded = computed(() => props.snapshot.body_encoding === 'base64')
-const credentials = computed<Credential[]>(() => props.snapshot.credentials ?? [])
+const credentials = computed<Credential[]>(() => (props.snapshot.credentials ?? []).filter(item => requiredCredentialNames.value === null || requiredCredentialNames.value.includes(`${item.kind} ${item.name}`.toLowerCase())))
 const signed = computed(() => credentials.value.filter(item => !item.replayable))
 const dirty = computed(() => draftBody.value !== baselineBody.value || draftHeaders.value !== baselineHeaders.value)
 const headerPreview = computed(() => {
@@ -40,7 +46,7 @@ const headerPreview = computed(() => {
   catch { return editableHeaders(props.snapshot.headers) }
 })
 const missing = computed(() => credentials.value.filter(item => item.replayable && !credentialValues[credentialKey(item)]?.trim()))
-const canRun = computed(() => !busy.value && !signed.value.length && !missing.value.length && current.value?.state !== 'running')
+const canRun = computed(() => !busy.value && !resolvingCredentials.value && props.snapshot.method !== 'WS' && !props.snapshot.unavailable && !(props.snapshot.redacted && !props.snapshot.raw_retained) && !signed.value.length && !missing.value.length && current.value?.state !== 'running')
 
 function credentialKey(item: Credential): string {
   return `${item.kind}:${item.name.toLowerCase()}`
@@ -56,11 +62,13 @@ function editableHeaders(headers: Record<string, string>): Record<string, string
 }
 
 function resetDraft() {
+  requiredCredentialNames.value = null
   baselineBody.value = draftBody.value = encoded.value ? props.snapshot.body : formatBody(props.snapshot.body)
   baselineHeaders.value = draftHeaders.value = JSON.stringify(editableHeaders(props.snapshot.headers), null, 2)
   for (const key of Object.keys(credentialValues)) delete credentialValues[key]
   error.value = notice.value = ''
   current.value = null
+  comparison.value = null
 }
 
 function parseHeaders(): Record<string, string> {
@@ -95,12 +103,25 @@ async function validate() {
   busy.value = true
   try {
     const result = await validateReplay(buildRequest(false))
+    requiredCredentialNames.value = result.missing_credentials.map(v => v.toLowerCase())
     notice.value = `结构校验通过：${result.modified ? '将发送修改后的内容' : '将原样发送'}，正文 ${result.body_bytes.toLocaleString()} 字节。` + (result.missing_credentials.length ? ` 仍需补充凭证：${result.missing_credentials.join('、')}。` : '')
   } catch (e) {
     error.value = String(e)
   } finally {
     busy.value = false
   }
+}
+
+async function resolveCredentials() {
+  if (props.snapshot.method === 'WS') return
+  requirementsController?.abort()
+  const request = requirementsController = new AbortController()
+  resolvingCredentials.value = true
+  try {
+    const result = await validateReplay(buildRequest(false), request.signal)
+    if (!request.signal.aborted) requiredCredentialNames.value = result.missing_credentials.map(v => v.toLowerCase())
+  } catch { if (!request.signal.aborted) requiredCredentialNames.value = null }
+  finally { if (!request.signal.aborted) resolvingCredentials.value = false }
 }
 
 async function run() {
@@ -168,7 +189,7 @@ async function loadHistory() {
 }
 
 function describe(record: ReplayRecord): string {
-  const reason = record.reason === 'timeout' ? '（超时）' : record.reason === 'manual' ? '（手动）' : ''
+  const reason = record.reason === 'timeout' ? '（超时）' : record.reason === 'manual' ? '（手动）' : record.reason === 'gateway_restarted' ? '（网关重启）' : ''
   return `${replayStateLabel(record.state)}${reason}${record.status_code ? ` · HTTP ${record.status_code}` : ''}${record.error ? ` · ${record.error}` : ''}`
 }
 
@@ -178,12 +199,13 @@ function elapsed(record: ReplayRecord): string {
 }
 
 watch(() => [props.traceId, props.source], () => { resetDraft(); void loadHistory() }, { immediate: true })
+watch(() => [props.traceId, props.source, draftBody.value, draftHeaders.value], () => { clearTimeout(requirementsTimer); resolvingCredentials.value = true; requirementsTimer = setTimeout(() => { void resolveCredentials() }, 250) }, { immediate: true })
 watch(() => props.refreshKey, () => { void loadHistory(); void refreshCurrent() })
-onUnmounted(() => { disposed = true; clearTimeout(poll); controller?.abort() })
+onUnmounted(() => { disposed = true; clearTimeout(poll); clearTimeout(requirementsTimer); controller?.abort(); requirementsController?.abort() })
 </script>
 
 <template>
-  <section class="min-w-0 space-y-3 rounded-lg border bg-card p-3" aria-label="请求重放工作台">
+  <section v-if="snapshot.method !== 'WS'" class="min-w-0 space-y-3 rounded-lg border bg-card p-3" aria-label="请求重放工作台">
     <div class="flex flex-wrap items-center gap-2">
       <RepeatIcon class="h-3.5 w-3.5 text-violet-700" />
       <h3 class="text-xs font-semibold">重放 · {{ source === 'original' ? '客户端原始请求（再次经过网关规则）' : '实际出站请求（不再重复注入或断点）' }}</h3>
@@ -201,15 +223,18 @@ onUnmounted(() => { disposed = true; clearTimeout(poll); controller?.abort() })
         <span class="font-mono text-[10px] text-muted-foreground">{{ current.trace_id.slice(0, 8) }}</span>
         <div class="ml-auto flex gap-1">
           <Button size="sm" variant="outline" class="h-7 text-xs" @click="emit('select', current.trace_id)"><ExternalLinkIcon class="mr-1 h-3 w-3" />查看新调用</Button>
+          <Button v-if="current.state !== 'running'" size="sm" variant="outline" class="h-7 text-xs" @click="comparison = current">对比来源响应</Button>
           <Button v-if="current.state === 'running'" size="sm" variant="destructive" class="h-7 text-xs" :disabled="busy" @click="cancel"><XCircleIcon class="mr-1 h-3 w-3" />取消重放</Button>
         </div>
       </div>
     </div>
 
+    <ResponseComparison v-if="comparison" :source-trace="traceId" :replay-trace="comparison.trace_id" :status="comparison.state" />
     <div v-if="encoded" class="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">压缩或二进制正文只能原样重放，无法编辑。</div>
     <div v-else class="space-y-2">
       <div class="flex flex-wrap items-center gap-2"><Label for="replay-body" class="text-xs font-semibold">重放正文</Label><span class="text-[10px] text-muted-foreground">{{ dirty ? '已修改，将发送编辑后的内容' : '未修改，将发送捕获的原始字节' }}</span></div>
-      <Textarea id="replay-body" v-model="draftBody" spellcheck="false" rows="10" class="min-h-32 resize-y font-mono text-xs leading-relaxed" />
+      <p v-if="snapshot.redacted" class="text-[11px] text-amber-800">正文已脱敏，编辑关闭。{{ snapshot.raw_retained ? '原样重放会使用保留的原文。' : '原文没有保留，不能精确重放此快照。' }}</p>
+      <Textarea id="replay-body" v-model="draftBody" :disabled="snapshot.redacted || Boolean(snapshot.unavailable)" spellcheck="false" rows="10" class="min-h-32 resize-y font-mono text-xs leading-relaxed" />
     </div>
     <details class="rounded-lg border bg-background"><summary class="cursor-pointer px-3 py-2 text-xs font-semibold">编辑允许的请求头</summary><div class="space-y-2 border-t p-3"><p class="text-[11px] leading-relaxed text-muted-foreground">可编辑 Content-Type、Accept、Anthropic-Version、Anthropic-Beta 和 OpenAI-Beta；其余请求头按捕获内容原样发送。</p><Label for="replay-headers" class="sr-only">重放请求头</Label><Textarea id="replay-headers" v-model="draftHeaders" spellcheck="false" rows="4" class="font-mono text-xs" /></div></details>
 
@@ -221,7 +246,7 @@ onUnmounted(() => { disposed = true; clearTimeout(poll); controller?.abort() })
         <Input :id="`credential-${credentialKey(item)}`" v-model="credentialValues[credentialKey(item)]" type="password" autocomplete="off" spellcheck="false" :disabled="!item.replayable" :placeholder="item.scheme ? `${item.scheme} 之后的凭证` : '凭证值'" class="font-mono text-xs" />
       </div>
     </div>
-    <p v-else class="text-[11px] text-muted-foreground">捕获的请求没有携带凭证；重放将不带鉴权发送（适用于本地或无鉴权上游）。</p>
+    <p v-else class="text-[11px] text-muted-foreground">{{ resolvingCredentials ? '正在核对目标与鉴权要求…' : '无需补充本次凭证；如 Provider 配置了密钥环境变量，将在出站时使用。' }}</p>
 
     <div class="flex flex-wrap items-end gap-2">
       <div class="space-y-1"><Label for="replay-timeout" class="text-xs">超时（秒）</Label><Input id="replay-timeout" v-model.number="timeoutSeconds" type="number" min="1" max="3600" step="1" class="h-8 w-28 text-xs" /></div>
@@ -242,8 +267,10 @@ onUnmounted(() => { disposed = true; clearTimeout(poll); controller?.abort() })
           <span>{{ record.source === 'original' ? '原始' : '出站' }}{{ record.modified ? ' · 已修改' : '' }}</span>
           <span class="min-w-0 flex-1 truncate" :class="record.state === 'error' ? 'text-red-700' : record.state === 'canceled' ? 'text-zinc-500' : ''">{{ describe(record) }}</span>
           <Button size="sm" variant="ghost" class="h-6 px-2 text-[11px]" @click="emit('select', record.trace_id)">查看 {{ record.trace_id.slice(0, 8) }}</Button>
+          <Button v-if="record.state !== 'running'" size="sm" variant="ghost" class="h-6 px-2 text-[11px]" @click="comparison = record">对比响应</Button>
         </li>
       </ul>
     </div>
   </section>
+  <section v-else class="rounded-lg border bg-card p-4 text-xs leading-relaxed text-muted-foreground">此快照是 WebSocket 的 response.create 消息。可以查看原始帧、上下文变化和响应消息；当前重放工作台发送 HTTP 模型请求。请在 SDK 中新建 WebSocket 调用，或使用 HTTP Responses 接口重放独立请求。</section>
 </template>

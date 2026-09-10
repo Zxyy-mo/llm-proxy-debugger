@@ -2,7 +2,7 @@
 
 ## Flow and ownership
 
-The proxy captures the complete client request separately from the display-limited log. Enabled rules match the original body and the upstream-prefixed path in creation order. All system injections compose before interception; the first matching intercept rule supplies the wait policy. A server-owned manager waits on a timer, the original HTTP context, and one decision channel. Browser availability never owns forwarding. Notifications are best-effort; HTTP snapshots are authoritative.
+The proxy captures the complete client request separately from the display-limited log. Enabled rules match the original body and the default-upstream-prefixed path, descending by `priority` and preserving saved order for ties. Protocol-aware instruction injections compose before interception; the first matching intercept rule supplies the wait policy. A server-owned manager waits on a timer, the original HTTP context, and one decision channel. Browser availability never owns forwarding. Notifications are best-effort; HTTP snapshots are authoritative.
 
 `Rule` retains its existing fields and adds `disabled` (default false), `wait_seconds` (default 30, range 1–3600), and `timeout_action` (`forward`, default, or `cancel`). Changing/deleting a rule affects future requests only. GET/POST `/api/rules` and PUT/DELETE `/api/rules/{id}` support rule lifecycle. Empty paths, invalid JSON, invalid waits and policies return JSON 400; unknown IDs return 404; unsupported methods return 405 with Allow.
 
@@ -39,7 +39,9 @@ Compressed/non-UTF-8 snapshot bodies are base64 encoded with `body_encoding: "ba
 
 `RequestLog.status` adds `pending` and `canceled`. `interception` carries the metadata above. `wait_duration_ms` and `upstream_duration_ms` separate human/rule waiting from the elapsed upstream operation (not TTFT). Total duration still includes capture/processing overhead. `request_updated` contains `{event, trace_id, log}` for intermediate lifecycle changes. `interceptions_updated` invalidates pending snapshots. Existing request_start/end and sessions_updated events remain compatible and log revisions remain authoritative. Graphs and inspectors must render pending/canceled states explicitly.
 
-Full snapshots, pending decisions and rules are process-local and reset on restart, consistent with the existing store. WebSocket frame interception is outside this contract.
+Full request files, rule configuration and interception metadata persist by default. Live decision channels, client sockets and editor drafts do not resume across process restart: restored active records become HTTP 503 errors with `interception.reason:gateway_restarted`, and no traffic is automatically sent. Historical metadata is available through history/requests APIs; the old live interception manager entry is not recreated.
+
+Recording privacy projects pending content and disables raw body editing; unchanged release/cancel remain available. Provider selection and privacy policy are fixed at admission. See [context/rules](context-rules.md), [privacy/history](privacy-history-tools.md) and [provider routing](providers-transports.md). WebSocket frame interception remains outside this contract.
 
 ## Required verification
 

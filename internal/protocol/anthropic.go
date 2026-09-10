@@ -28,10 +28,15 @@ func (h *AnthropicHandler) Parse(data []byte) (*Metrics, error) {
 			}
 		}
 		metrics.InputTokens = int(root.Get("usage.input_tokens").Int())
+		metrics.IsFinalInputTokens = root.Get("usage.input_tokens").Exists()
 		metrics.OutputTokens = int(root.Get("usage.output_tokens").Int())
 		metrics.IsFinalOutputTokens = root.Get("usage.output_tokens").Exists()
+		if !metrics.IsFinalOutputTokens {
+			metrics.OutputTokens = len([]rune(metrics.OutputContent))
+		}
 	case "message_start":
 		metrics.InputTokens = int(root.Get("message.usage.input_tokens").Int())
+		metrics.IsFinalInputTokens = root.Get("message.usage.input_tokens").Exists()
 	case "thinking_delta":
 		metrics.ThinkingContent = root.Get("thinking").String()
 	case "content_block_delta":
@@ -49,6 +54,10 @@ func (h *AnthropicHandler) Parse(data []byte) (*Metrics, error) {
 			h.thinkingStreak = 0
 		}
 	case "message_delta":
+		if value := root.Get("usage.input_tokens"); value.Exists() {
+			metrics.InputTokens = int(value.Int())
+			metrics.IsFinalInputTokens = true
+		}
 		if value := root.Get("usage.output_tokens"); value.Exists() {
 			metrics.OutputTokens = int(value.Int())
 			metrics.IsFinalOutputTokens = true

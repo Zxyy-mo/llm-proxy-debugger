@@ -5,10 +5,11 @@ import vue from '@vitejs/plugin-vue'
 const BACKEND = process.env.BACKEND_URL ?? 'http://localhost:12337'
 
 export default defineConfig({
+  base: './',
   plugins: [vue()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
   server: {

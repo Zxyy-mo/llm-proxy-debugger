@@ -73,11 +73,12 @@ func (m *Manager) Start(key, fingerprint string, record Record, timeout time.Dur
 	m.mu.Lock()
 	if id, exists := m.keys[key]; exists {
 		existing := m.entries[id]
+		current, previousFingerprint := existing.record, existing.fingerprint
 		m.mu.Unlock()
-		if existing.fingerprint != fingerprint {
+		if previousFingerprint != fingerprint {
 			return Record{}, false, ErrKeyReused
 		}
-		return existing.record, false, nil
+		return current, false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	record.State = "running"
@@ -108,7 +109,66 @@ func (m *Manager) Start(key, fingerprint string, record Record, timeout time.Dur
 		m.mu.Unlock()
 		m.notify()
 	}()
-	return e.record, true, nil
+	return record, true, nil
+}
+
+type Saved struct {
+	Record      Record `json:"record"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func (m *Manager) Snapshot() []Saved {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	saved := make([]Saved, 0, len(m.entries))
+	for _, e := range m.entries {
+		saved = append(saved, Saved{e.record, e.fingerprint})
+	}
+	return saved
+}
+
+func (m *Manager) Restore(saved []Saved) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range saved {
+		record := item.Record
+		if record.State == "running" {
+			record.State = "error"
+			record.Reason = "gateway_restarted"
+			record.Error = "网关重启，重放已中断；不会自动补发"
+			record.StatusCode = 503
+			record.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		done := make(chan struct{})
+		close(done)
+		m.entries[record.ID] = &entry{record: record, fingerprint: item.Fingerprint, done: done}
+		m.keys[record.IdempotencyKey] = record.ID
+	}
+}
+
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	var cancels []context.CancelFunc
+	var done []chan struct{}
+	for _, e := range m.entries {
+		if e.record.State == "running" && e.cancel != nil {
+			cancels = append(cancels, e.cancel)
+			done = append(done, e.done)
+		}
+	}
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for _, finished := range done {
+		select {
+		case <-finished:
+		case <-timeout.C:
+			return
+		}
+	}
 }
 
 func (m *Manager) Get(id string) (Record, error) {

@@ -2,6 +2,7 @@ package sse
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 )
 
@@ -26,7 +27,10 @@ type SSEParser struct {
 
 	maxBufferBytes int
 	maxDataBytes   int
+	err            error
 }
+
+func (p *SSEParser) Err() error { return p.err }
 
 func NewSSEParser() *SSEParser {
 	return &SSEParser{
@@ -63,12 +67,13 @@ func (p *SSEParser) rememberField(field string, value []byte) {
 
 // Feed 消费一个字节块，并返回所有已完整组装分发的 SSE 事件。
 func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
-	if len(chunk) == 0 {
+	if len(chunk) == 0 || p.err != nil {
 		return nil
 	}
 
 	p.buf = append(p.buf, chunk...)
 	if p.maxBufferBytes > 0 && len(p.buf) > p.maxBufferBytes {
+		p.err = fmt.Errorf("SSE frame exceeds the observation limit")
 		p.buf = nil
 		p.resetEvent()
 		return nil
@@ -116,8 +121,10 @@ func (p *SSEParser) Feed(chunk []byte) []SSEEvent {
 			p.curEvent = string(value)
 		case "data":
 			if p.maxDataBytes > 0 && p.dataBuf.Len()+len(value)+1 > p.maxDataBytes {
+				p.err = fmt.Errorf("SSE event exceeds the observation limit")
+				p.buf = nil
 				p.resetEvent()
-				continue
+				return out
 			}
 			p.appendDataLine(value)
 		case "id":

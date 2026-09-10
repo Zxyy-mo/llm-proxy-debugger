@@ -41,6 +41,7 @@ func (h *OpenAIHandler) Parse(data []byte) (*Metrics, error) {
 	}
 	if usage := root.Get("usage"); usage.IsObject() {
 		metrics.InputTokens = int(usage.Get("prompt_tokens").Int())
+		metrics.IsFinalInputTokens = usage.Get("prompt_tokens").Exists()
 		if value := usage.Get("completion_tokens"); value.Exists() {
 			metrics.OutputTokens = int(value.Int())
 			metrics.IsFinalOutputTokens = true

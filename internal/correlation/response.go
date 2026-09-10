@@ -147,6 +147,9 @@ func (c *ResponseCapture) Event(data []byte) bool {
 		}
 		if kind == "response.completed" || kind == "response.incomplete" || kind == "response.failed" {
 			c.metadata.Complete = true
+			if kind != "response.completed" && c.metadata.Error == "" {
+				c.metadata.Error = kind
+			}
 		}
 	default:
 		if kind == "message_start" || kind == "message_delta" || kind == "content_block_delta" || kind == "content_block_start" {
@@ -203,7 +206,7 @@ func (c *ResponseCapture) Event(data []byte) bool {
 			part := root.Get("content_block")
 			block := c.block(index)
 			block.Kind, block.ID, block.Name = part.Get("type").String(), part.Get("id").String(), part.Get("name").String()
-			block.Input = part.Get("input").Value()
+			block.Input = jsonValue(part.Get("input"))
 			block.Text.WriteString(stringValue(part.Get("text")))
 		case "content_block_delta":
 			block := c.block(index)
@@ -260,7 +263,9 @@ func (c *ResponseCapture) Response() Response {
 		} else if block.Kind == "tool_use" {
 			input := block.Input
 			if block.Arguments.Len() > 0 {
-				if err := json.Unmarshal([]byte(block.Arguments.String()), &input); err != nil {
+				decoder := json.NewDecoder(strings.NewReader(block.Arguments.String()))
+				decoder.UseNumber()
+				if err := decoder.Decode(&input); err != nil {
 					return result // incomplete tool JSON is not a reliable history anchor
 				}
 			}

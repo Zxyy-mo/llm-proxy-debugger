@@ -45,7 +45,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func (s *Store) RulesSnapshot() []Rule {
 	s.RLock()
 	defer s.RUnlock()
-	return append([]Rule{}, s.Rules...)
+	rules := append([]Rule{}, s.Rules...)
+	slices.SortStableFunc(rules, func(a, b Rule) int {
+		if a.Priority > b.Priority {
+			return -1
+		}
+		if a.Priority < b.Priority {
+			return 1
+		}
+		return 0
+	})
+	return rules
 }
 
 func decodeRule(w http.ResponseWriter, r *http.Request) (Rule, bool) {
@@ -61,7 +71,7 @@ func decodeRule(w http.ResponseWriter, r *http.Request) (Rule, bool) {
 		return rule, false
 	}
 	rule.PathMatch = strings.TrimSpace(rule.PathMatch)
-	if rule.PathMatch == "" || rule.WaitSeconds < 1 || rule.WaitSeconds > 3600 || !slices.Contains([]string{"forward", "cancel"}, rule.TimeoutAction) {
+	if rule.PathMatch == "" || rule.Priority < -100000 || rule.Priority > 100000 || rule.WaitSeconds < 1 || rule.WaitSeconds > 3600 || !slices.Contains([]string{"forward", "cancel"}, rule.TimeoutAction) {
 		writeError(w, http.StatusBadRequest, "path_match is required; wait_seconds must be 1–3600; timeout_action must be forward or cancel")
 		return rule, false
 	}
@@ -86,6 +96,7 @@ func (s *Store) RulesHandler(w http.ResponseWriter, r *http.Request) {
 			rule.ID = uuid.New().String()
 			s.Rules = append(s.Rules, rule)
 			s.Unlock()
+			s.changed()
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(rule)
 		}
@@ -123,6 +134,7 @@ func (s *Store) ruleHandler(w http.ResponseWriter, r *http.Request, id string) {
 		s.Rules[index] = rule
 	}
 	s.Unlock()
+	s.changed()
 	if r.Method == http.MethodDelete {
 		w.WriteHeader(http.StatusNoContent)
 	} else {

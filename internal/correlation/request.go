@@ -3,6 +3,7 @@
 package correlation
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,16 @@ import (
 
 	"github.com/tidwall/gjson"
 )
+
+func jsonValue(result gjson.Result) any {
+	var value any
+	decoder := json.NewDecoder(bytes.NewBufferString(result.Raw))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return nil
+	}
+	return value
+}
 
 const MaxHistoryBytes = 4 << 20
 
@@ -62,6 +73,10 @@ func ExtractRequest(h http.Header, path string, body []byte, upstream string) Re
 	r := Request{
 		Scope:    Hash(upstream, h.Get("Authorization"), h.Get("X-API-Key")),
 		Protocol: Protocol(path),
+	}
+	if key := h.Get("Api-Key"); key != "" {
+		// Keep existing scopes stable while isolating providers that use api-key.
+		r.Scope = Hash(r.Scope, "api-key", key)
 	}
 	seen := make(map[string]bool)
 	add := func(kind, value, source string) {
@@ -124,7 +139,7 @@ func ExtractRequest(h http.Header, path string, body []byte, upstream string) Re
 	}
 	context, _ := json.Marshal([]any{
 		r.Protocol, normalizeContent(root.Get("system")),
-		normalizeContent(root.Get("instructions")), root.Get("tools").Value(),
+		normalizeContent(root.Get("instructions")), jsonValue(root.Get("tools")),
 	})
 	r.ContextHash = Hash(r.Scope, string(context))
 	if input.Type == gjson.String && input.String() != "" {
@@ -241,10 +256,10 @@ func normalizeContent(content gjson.Result) []any {
 			case "tool_use":
 				parts = append(parts, map[string]any{
 					"type": "tool_use", "id": part.Get("id").String(),
-					"name": part.Get("name").String(), "input": part.Get("input").Value(),
+					"name": part.Get("name").String(), "input": jsonValue(part.Get("input")),
 				})
 			default:
-				parts = append(parts, part.Value())
+				parts = append(parts, jsonValue(part))
 			}
 		}
 	}
@@ -279,7 +294,7 @@ func fingerprintItem(item gjson.Result) string {
 			message["tool_calls"] = normalizedCalls
 		}
 		if function := item.Get("function_call"); function.IsObject() {
-			message["function_call"] = function.Value()
+			message["function_call"] = jsonValue(function)
 		}
 		normalized = message
 	} else if kind == "function_call" {
@@ -289,7 +304,7 @@ func fingerprintItem(item gjson.Result) string {
 		}
 	} else {
 		// Unknown/multimodal items must match exactly; never guess their semantics.
-		normalized = item.Value()
+		normalized = jsonValue(item)
 	}
 	canonical, err := json.Marshal(normalized)
 	if err != nil {

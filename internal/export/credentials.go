@@ -17,6 +17,7 @@ var (
 		"Authorization": true, "Proxy-Authorization": true, "Cookie": true,
 		"X-Api-Key": true, "Api-Key": true, "X-Auth-Token": true, "X-Access-Token": true,
 		"X-Goog-Api-Key": true, "Ocp-Apim-Subscription-Key": true, "X-Amz-Security-Token": true,
+		"Sec-Websocket-Protocol": true,
 	}
 	credentialHints  = []string{"authorization", "api-key", "apikey", "api_key", "token", "secret", "password", "cookie", "credential", "signature"}
 	secretParameters = map[string]bool{
@@ -147,7 +148,7 @@ func RedactQuery(raw string) string {
 // Classify derives the forwarding profile of a request and the credentials it
 // carried. Credential values are inspected only to record their scheme.
 func Classify(r *http.Request) (*store.Forwarding, []store.Credential) {
-	forwarding := &store.Forwarding{Scheme: r.URL.Scheme, Host: r.URL.Host, Path: r.URL.Path, Headers: make(http.Header)}
+	forwarding := &store.Forwarding{Scheme: r.URL.Scheme, Host: r.URL.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, Headers: make(http.Header)}
 	if forwarding.Scheme == "" {
 		forwarding.Scheme = "http"
 		if r.TLS != nil {

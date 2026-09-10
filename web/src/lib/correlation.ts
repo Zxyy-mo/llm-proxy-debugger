@@ -26,6 +26,7 @@ const warnings: Record<string, string> = {
   session_boundary: '父调用位于其他会话；当前请求保留显式指定的会话归属。',
   cycle: '这个父调用引用会形成循环，已跳过该关联。',
   history_limit: '内容超过历史匹配的大小上限，仍会按明确的 ID 进行关联。',
+  deleted_parent: '父调用已从本地历史中删除，当前记录保留其引用。',
 }
 
 export function warningLabel(warning?: string): string {

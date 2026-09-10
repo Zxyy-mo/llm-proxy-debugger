@@ -38,26 +38,7 @@ func (s *Server) prepareRequest(path string, original []byte) ([]byte, *store.Ru
 		if rule.InjectSystem == "" {
 			continue
 		}
-		var payload map[string]json.RawMessage
-		if json.Unmarshal(body, &payload) != nil || payload == nil {
-			continue
-		}
-		var system any
-		if raw := payload["system"]; raw != nil && json.Unmarshal(raw, &system) != nil {
-			continue
-		}
-		switch current := system.(type) {
-		case string:
-			system = current + "\n\n" + rule.InjectSystem
-		case []any:
-			system = append(current, map[string]string{"type": "text", "text": rule.InjectSystem})
-		case nil:
-			system = rule.InjectSystem
-		default:
-			continue
-		}
-		payload["system"], _ = json.Marshal(system)
-		body, _ = json.Marshal(payload)
+		body = injectPrompt(path, body, rule.InjectSystem)
 	}
 	return body, breakpoint
 }
@@ -105,7 +86,13 @@ func interceptionError(w http.ResponseWriter, status int, err error) {
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
-func writeInterception(w http.ResponseWriter, detail intercept.Detail) {
+func (s *Server) writeInterception(w http.ResponseWriter, detail intercept.Detail) {
+	policy, scope := s.store.PrivacyContext(detail.TraceID)
+	if policy.Record {
+		detail.Body = string(s.store.Privacy.JSON(policy, scope, []byte(detail.Body)))
+		detail.OriginalBody = string(s.store.Privacy.JSON(policy, scope, []byte(detail.OriginalBody)))
+		detail.EditBlockedReason = "记录脱敏已启用，可原样放行或取消；原文不会在断点编辑器中展示。"
+	}
 	json.NewEncoder(w).Encode(map[string]any{"server_time": time.Now().UTC().Format(time.RFC3339Nano), "request": detail})
 }
 
@@ -139,7 +126,7 @@ func (s *Server) InterceptionsHandler(w http.ResponseWriter, r *http.Request) {
 			interceptionError(w, http.StatusNotFound, err)
 			return
 		}
-		writeInterception(w, detail)
+		s.writeInterception(w, detail)
 		return
 	} else if r.Method == http.MethodPatch {
 		action = "save"
@@ -185,5 +172,5 @@ func (s *Server) InterceptionsHandler(w http.ResponseWriter, r *http.Request) {
 		interceptionError(w, status, err)
 		return
 	}
-	writeInterception(w, detail)
+	s.writeInterception(w, detail)
 }

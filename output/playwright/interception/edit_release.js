@@ -1,0 +1,58 @@
+async (page) => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message) }
+  const json = async (url) => (await page.request.get(url)).json()
+  const api = 'http://127.0.0.1:12338'
+  const listing = await json(api + '/api/interceptions')
+  assert(listing.requests.length === 1, 'expected one pending request')
+  const trace = listing.requests[0].trace_id
+  const before = (await json(api + '/api/interceptions/' + trace)).request
+  assert(before.revision === 1 && before.body.endsWith('}'), 'invalid edit must not save')
+  assert((await json('http://127.0.0.1:28001/__requests')).length === 0, 'pending request reached upstream')
+  const payload = JSON.stringify({ model: 'qa-edited', input: 'Edited in the browser', metadata: { qa_case: 'edit-release' } }, null, 2)
+  const body = page.getByRole('textbox', { name: '本次请求正文', exact: true })
+  await body.fill(payload)
+  await page.getByRole('textbox', { name: '本次请求头', exact: true }).fill(JSON.stringify({ 'Content-Type': 'application/json', Accept: 'application/json' }, null, 2))
+  await page.getByRole('button', { name: '校验', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: '结构校验通过' }).waitFor()
+  await page.getByRole('button', { name: '保存修改', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: '已保存' }).waitFor()
+  const saved = (await json(api + '/api/interceptions/' + trace)).request
+  assert(saved.body === payload && saved.revision === 2 && saved.deadline === before.deadline, 'saved body, version or deadline incorrect')
+  const unsaved = JSON.stringify({ model: 'qa-edited', input: 'Unsent local draft', metadata: { qa_case: 'edit-release' } }, null, 2)
+  await body.fill(unsaved)
+  const timerBefore = await page.getByRole('timer').innerText()
+  await page.waitForFunction(value => document.querySelector('[role="timer"]')?.textContent !== value, timerBefore)
+  await page.getByRole('button', { name: '刷新待处理请求' }).click()
+  await page.getByRole('button', { name: '原始 / 出站', exact: true }).click()
+  await page.getByRole('button', { name: '待处理 1', exact: true }).click()
+  assert(await body.inputValue() === unsaved, 'switching views or refreshing lost the local draft')
+  await body.fill(payload)
+  await page.screenshot({ path: 'output/playwright/interception/desktop-editor.png', fullPage: true })
+  await page.reload()
+  await page.getByRole('textbox', { name: '本次请求正文', exact: true }).waitFor()
+  assert(await page.getByRole('textbox', { name: '本次请求正文', exact: true }).inputValue() === payload, 'saved draft did not survive browser reload')
+  const layouts = []
+  for (const [width, height] of [[1366,768], [390,844], [320,640], [844,390]]) {
+    await page.setViewportSize({ width, height })
+    const button = page.getByRole('button', { name: '放行', exact: true })
+    await button.click({ trial: true, timeout: 2500 })
+    const bounds = await button.boundingBox()
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)
+    assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width && bounds.y + bounds.height <= height && !overflow, 'release button clipped at ' + width + 'x' + height)
+    layouts.push({ width, height, release_reachable: true, horizontal_overflow: overflow })
+    if (width === 390) await page.screenshot({ path: 'output/playwright/interception/mobile-editor.png', fullPage: true })
+  }
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.getByRole('button', { name: '放行', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: '已放行' }).waitFor()
+  const hits = await json('http://127.0.0.1:28001/__requests')
+  assert(hits.length === 1 && hits[0].body === payload && hits[0].auth_preserved && hits[0].accept === 'application/json', 'forwarded body or headers incorrect')
+  assert(hits[0].content_length === await page.evaluate(text => new TextEncoder().encode(text).length, payload), 'outgoing content length incorrect')
+  const capture = await json(api + '/api/requests/' + trace)
+  assert(capture.original.body.includes('TAIL_MARKER') && capture.outgoing.body === payload, 'full audit snapshots incorrect')
+  assert(!JSON.stringify(capture).includes('qa-auth-original'), 'raw authorization leaked through capture API')
+  await page.getByRole('button', { name: '原始 / 出站', exact: true }).click()
+  await page.getByRole('heading', { name: '原始 / 出站请求', exact: true }).waitFor()
+  await page.screenshot({ path: 'output/playwright/interception/desktop-audit.png', fullPage: true })
+  console.log(JSON.stringify({ trace, invalid_edit_preserved: true, saved_revision: saved.revision, countdown_decreased: true, reload_restored: true, draft_survived_view_change: true, forwarded_once: hits.length === 1, credentials_preserved: hits[0].auth_preserved, full_audit: true, layouts }))
+}

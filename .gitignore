@@ -1,0 +1,47 @@
+log/
+.idea/
+.DS_Store
+
+# Local build outputs
+goproxy
+goproxy-*
+*.exe
+
+# Local notes and scratch docs
+Refactor.md
+refactor.md
+plan.md
+antigravity_mcp_sandbox_tutorial.md
+
+# Local editor and assistant state
+AGENTS.md
+AGENT.md
+agent.md
+CLAUDE.md
+claude.md
+CODEX.md
+codex.md
+.cursorrules
+.cursor/
+.codex/
+.agent/
+.agents/
+.trellis/
+.ace-tool/
+.github/
+.claude/*
+
+# Local browser sessions, raw captures and personal workflow notes
+.playwright-cli/
+private-remote-workflow.md
+
+# Publish curated verification reports, scripts and synthetic screenshots only.
+output/**
+!output/playwright/
+!output/playwright/*/
+!output/playwright/*/verification.md
+!output/playwright/*/results.json
+!output/playwright/*/*.py
+!output/playwright/*/*.js
+!output/playwright/*/*.png
+output/playwright/*/live-*

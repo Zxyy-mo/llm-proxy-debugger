@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-10",
+  "branch": "refactor/modular-structure",
+  "environment": {
+    "os": "Windows amd64",
+    "go": "1.24.0",
+    "node": "24.18.0",
+    "npm": "11.16.0",
+    "ui": "http://127.0.0.1:12340/ui/"
+  },
+  "validation": {
+    "go_race": "passed",
+    "go_vet": "passed",
+    "vue_typecheck_and_build": "passed",
+    "git_diff_check": "passed"
+  },
+  "functional_browser": {
+    "passed": 25,
+    "traces": {
+      "parent": "a314c27f-2c0f-42a3-986f-7ca8715015a3",
+      "child": "54609b09-8dfb-460d-9d84-6e70fadd1aca",
+      "large": "81f11f83-b43a-42ab-a30d-ea29edf4a11e",
+      "tools": "75d791a9-1aab-4b00-9121-3be3da153bab",
+      "converted": "915db3f9-e196-486b-b83c-55c5dc64d109",
+      "convertedSSE": "44fde6d2-fc92-4ccd-8daf-1f7e64e9a46c",
+      "websocket": "4af5b3ca-f222-48b7-b04d-8dfb3f1a2855",
+      "replay": "2d9239e7-da43-4c22-a48b-832f4e651474",
+      "private": "23c5f96e-d997-47a5-bd77-63db3af24268"
+    },
+    "started_at": "2026-09-10T11:11:58.998Z",
+    "finished_at": "2026-09-10T11:13:33.125Z",
+    "script": "browser_qa.js",
+    "manual": [
+      "provider form saved configuration",
+      "provider history read returned HTTP 200 without creating a model call"
+    ]
+  },
+  "viewports": [
+    {
+      "requested": [
+        390,
+        844
+      ],
+      "viewport": [
+        390,
+        845
+      ],
+      "views": [
+        {
+          "tab": "Provider 与路由",
+          "controls": 46,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "脱敏策略",
+          "controls": 10,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "历史记录",
+          "controls": 35,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        }
+      ]
+    },
+    {
+      "requested": [
+        844,
+        390
+      ],
+      "viewport": [
+        845,
+        390
+      ],
+      "views": [
+        {
+          "tab": "Provider 与路由",
+          "controls": 46,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "脱敏策略",
+          "controls": 10,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "历史记录",
+          "controls": 35,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        }
+      ]
+    },
+    {
+      "requested": [
+        320,
+        568
+      ],
+      "viewport": [
+        320,
+        568
+      ],
+      "views": [
+        {
+          "tab": "Provider 与路由",
+          "controls": 46,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "脱敏策略",
+          "controls": 10,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "历史记录",
+          "controls": 35,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        }
+      ]
+    },
+    {
+      "requested": [
+        768,
+        1024
+      ],
+      "viewport": [
+        768,
+        1025
+      ],
+      "views": [
+        {
+          "tab": "Provider 与路由",
+          "controls": 46,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "脱敏策略",
+          "controls": 10,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "历史记录",
+          "controls": 35,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        }
+      ]
+    },
+    {
+      "requested": [
+        1440,
+        900
+      ],
+      "viewport": [
+        1440,
+        901
+      ],
+      "views": [
+        {
+          "tab": "Provider 与路由",
+          "controls": 46,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "脱敏策略",
+          "controls": 10,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        },
+        {
+          "tab": "历史记录",
+          "controls": 35,
+          "misses": [],
+          "documentOverflow": false,
+          "panelOverflow": false
+        }
+      ]
+    }
+  ],
+  "final_browser": {
+    "provider_auth_defaults": "Authorization",
+    "tool_node_accessible_name": "工具调用",
+    "console_errors": 0,
+    "console_warnings": 0
+  },
+  "interception": {
+    "ui_release": true,
+    "trace": "200bbe8e-a3cb-48a3-9ec3-10b74af84de0",
+    "status": 200,
+    "wait_ms": 41011.296,
+    "ttfc_ms": 2.586
+  },
+  "restart": {
+    "phase": "verify",
+    "passed": 13,
+    "checks": [
+      "provider configuration restored",
+      "privacy policy restored",
+      "rules restored",
+      "interrupted request has explicit restart reason",
+      "pending queue is empty",
+      "no duplicate or missing model records",
+      "completed metrics, lineage, routes, tools and WebSocket metadata restored",
+      "complete original and outgoing request snapshots restored",
+      "all client and upstream response variants retain exact bytes",
+      "independent tool graph nodes restored",
+      "replay records restored",
+      "replay idempotency survives restart",
+      "restart and replay retry did not resend traffic"
+    ],
+    "completed": 13,
+    "capture_hashes": 12
+  },
+  "cleanup": {
+    "phase": "cleanup",
+    "deleted": 2,
+    "removed_files": 6,
+    "deleted_parent_reference_preserved": true,
+    "synthetic_rule_removed": true
+  },
+  "real_relay": {
+    "model": "glm-5.3-flash",
+    "upstream": "user-supplied /v1 relay",
+    "binary": "gateway-foundation-verified.exe",
+    "cases": [
+      {
+        "case": "json",
+        "status": 200,
+        "trace_id": "83c78430-18f3-4011-92ec-9a8d9adc684f",
+        "response_bytes": 1618,
+        "download_exact": true,
+        "credential_isolated": true,
+        "token_sources": {
+          "input": "usage",
+          "output": "usage",
+          "thinking": "usage"
+        },
+        "ttfb_ms": 4019.598,
+        "ttfc_ms": 4021.198
+      },
+      {
+        "case": "sse",
+        "status": 200,
+        "trace_id": "e965f0f5-2da6-47b0-b57c-6c3eda2f5081",
+        "response_bytes": 36100,
+        "download_exact": true,
+        "credential_isolated": true,
+        "token_sources": {
+          "input": "usage",
+          "output": "usage",
+          "thinking": "usage"
+        },
+        "ttfb_ms": 633.053,
+        "ttfc_ms": 634.281
+      }
+    ],
+    "tested_capabilities": [
+      "native Chat Completions JSON",
+      "native Chat Completions SSE"
+    ],
+    "not_live_verified": [
+      "Responses",
+      "protocol conversion",
+      "provider history",
+      "Responses WebSocket"
+    ]
+  },
+  "regression_additions": [
+    "escaped URL paths through routing, export and replay",
+    "SSE observation overflow while preserving forwarded bytes",
+    "large integer correlation evidence",
+    "api-key credential identity isolation"
+  ],
+  "screenshots": [
+    "desktop-initial.png",
+    "mobile-providers.png",
+    "landscape-providers.png",
+    "desktop-providers.png",
+    "tools-graph.png",
+    "desktop-final.png"
+  ],
+  "notes": [
+    "One-pixel viewport differences reflect Chrome device emulation rounding.",
+    "Restart uses a non-retrying Python client to isolate gateway behavior from browser network retries.",
+    "No credentials are embedded in the reusable scripts or reports.",
+    "Latest browser checks followed the final UI build; latest Go checks and relay smoke followed all backend edits."
+  ],
+  "artifact_scan": {
+    "deliverable_files": 240,
+    "runtime_files": 26,
+    "credential_matches": 0,
+    "invalid_utf8": [],
+    "replacement_characters": [],
+    "broken_local_links": []
+  },
+  "owned_test_services_stopped": true,
+  "finished_at": "2026-09-10T12:46:36Z"
+}

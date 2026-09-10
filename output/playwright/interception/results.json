@@ -1,0 +1,160 @@
+{
+  "manual_edit_release": {
+    "status": "PASS",
+    "trace_id": "cd25dce5-d65f-4f97-98ae-09cd017a6f57",
+    "upstream_matches": 1,
+    "original_bytes": 2036,
+    "display_limit": 128,
+    "credentials_preserved": true,
+    "outgoing_length_correct": true,
+    "wait_duration_ms": 368225.212,
+    "upstream_duration_ms": 12.826
+  },
+  "timed_cases": {
+    "status": "PASS",
+    "upstream_requests": 5,
+    "page_errors": [],
+    "results": [
+      {
+        "case": "qa-timeout-forward",
+        "status": 200,
+        "state": "done",
+        "wait_ms": 4002.074
+      },
+      {
+        "case": "qa-timeout-cancel",
+        "status": 504,
+        "state": "canceled",
+        "wait_ms": 4002.087
+      },
+      {
+        "case": "manual-cancel",
+        "status": 409,
+        "outgoing": false
+      },
+      {
+        "case": "revision-conflict",
+        "local_draft_preserved": true,
+        "stale_release_disabled": true
+      },
+      {
+        "case": "client-disconnect",
+        "status": 499,
+        "outgoing": false
+      },
+      {
+        "case": "rule-disabled",
+        "future_request_forwarded": true,
+        "pending_policy_unchanged": true
+      }
+    ]
+  },
+  "layouts": {
+    "status": "PASS",
+    "layouts": [
+      {
+        "width": 1600,
+        "height": 1000,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 607,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 1366,
+        "height": 768,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 422,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 1024,
+        "height": 768,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 422,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 768,
+        "height": 600,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 242,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 402,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 320,
+        "height": 640,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 222,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 844,
+        "height": 390,
+        "queued_requests": 3,
+        "release_reachable": true,
+        "editor_height": 119,
+        "horizontal_overflow": false
+      }
+    ]
+  },
+  "rule_ui": {
+    "status": "PASS",
+    "edit_saved": true,
+    "enabled_changed": true,
+    "delete_saved": true,
+    "layouts": [
+      {
+        "width": 1600,
+        "height": 1000,
+        "save_reachable": true
+      },
+      {
+        "width": 1366,
+        "height": 768,
+        "save_reachable": true
+      },
+      {
+        "width": 1024,
+        "height": 768,
+        "save_reachable": true
+      },
+      {
+        "width": 768,
+        "height": 600,
+        "save_reachable": true
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "save_reachable": true
+      },
+      {
+        "width": 320,
+        "height": 640,
+        "save_reachable": true
+      },
+      {
+        "width": 844,
+        "height": 390,
+        "save_reachable": true
+      }
+    ]
+  },
+  "cleanup": {
+    "pending_requests": 0,
+    "test_rule_removed": true
+  }
+}

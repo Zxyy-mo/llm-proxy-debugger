@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/hub"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/sse"
@@ -15,15 +16,18 @@ import (
 // responseRecorder 在代理响应的同时，记录状态码、body，并实时处理 SSE 事件。
 type responseRecorder struct {
 	http.ResponseWriter
-	statusCode  int
-	body        *bytes.Buffer
-	isSSE       bool
-	wroteHeader bool
-	accumulator *protocol.Accumulator
-	sseParser   *sse.SSEParser
-	hub         *hub.Hub
-	logger      *zap.Logger
-	maxBodySize int
+	statusCode   int
+	body         *bytes.Buffer
+	isSSE        bool
+	wroteHeader  bool
+	accumulator  *protocol.Accumulator
+	sseParser    *sse.SSEParser
+	hub          *hub.Hub
+	logger       *zap.Logger
+	maxBodySize  int
+	bodyCaptured bool
+	capture      *correlation.ResponseCapture
+	onResponse   func(correlation.Response)
 
 	traceID    string
 	sseDumpDir string
@@ -51,6 +55,7 @@ func newResponseRecorder(
 		maxBodySize:    maxBodySize,
 		traceID:        traceID,
 		sseDumpDir:     sseDumpDir,
+		capture:        correlation.NewResponseCapture(handler.Name()),
 	}
 }
 
@@ -71,8 +76,11 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 			if evt.Data == "" {
 				continue
 			}
+			if r.capture.Event([]byte(evt.Data)) && r.onResponse != nil {
+				r.onResponse(r.capture.Metadata())
+			}
 			r.accumulator.Accumulate([]byte(evt.Data))
-			r.hub.Broadcast <- map[string]interface{}{
+			r.hub.Publish(map[string]interface{}{
 				"event":      "sse_delta",
 				"trace_id":   r.accumulator.TraceID,
 				"data":       evt.Data,
@@ -80,8 +88,8 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 				"sse_id":     evt.ID,
 				"sse_retry":  evt.RetryMS,
 				"sse_fields": evt.Fields,
-				"metrics":    r.accumulator,
-			}
+				"metrics":    *r.accumulator,
+			})
 			if r.accumulator.IsThinkingLoop {
 				r.logger.Warn("⚠️ [Thinking Loop Detected]",
 					zap.String("trace_id", r.accumulator.TraceID),
@@ -92,7 +100,7 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	}
 
 	// 非 SSE：限量缓存 body 用于日志
-	if r.body.Len() < r.maxBodySize {
+	if !r.bodyCaptured && r.body.Len() < r.maxBodySize {
 		remaining := r.maxBodySize - r.body.Len()
 		if len(b) <= remaining {
 			r.body.Write(b)
@@ -106,6 +114,23 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 func (r *responseRecorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
+	}
+}
+
+func (r *responseRecorder) captureJSON(body []byte) {
+	r.bodyCaptured = true
+	r.body.Reset()
+	limit := len(body)
+	if limit > r.maxBodySize {
+		limit = r.maxBodySize
+	}
+	if limit > 0 {
+		r.body.Write(body[:limit])
+	}
+	r.capture.JSON(body)
+	r.accumulator.Accumulate(body)
+	if r.onResponse != nil {
+		r.onResponse(r.capture.Metadata())
 	}
 }
 

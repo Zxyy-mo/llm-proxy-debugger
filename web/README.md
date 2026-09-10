@@ -1,5 +1,26 @@
-# Vue 3 + TypeScript + Vite
+# LLM Debug Gateway Web UI
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Vue 3 + TypeScript 的会话调试界面，使用 Vue Flow 和 Dagre 绘制调用路径。
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+```bash
+npm ci
+npm run dev
+```
+
+默认将 `/api/*` 和 `/api/ws` 转发到 `http://localhost:12337`。自定义后端地址：
+
+```bash
+BACKEND_URL=http://127.0.0.1:12666 npm run dev
+```
+
+`npm run build` 同时运行 TypeScript 检查和 Vite 生产构建。
+
+画布提供当前/全部会话、平移、缩放、自动布局、定位选中调用、节点详情和 JSON 导出。实线表示明确 ID 引用，虚线表示历史内容推断。键盘聚焦节点后可按 Enter 或 Space 查看详情；窄屏通过抽屉查看详情。
+
+“显示全图”会在窗口、分隔面板尺寸和调用节点变化后自动适配。手动缩放或拖动画布后，可再次点击它恢复全图模式。长报文、日志列表和规则面板均可独立滚动；新建规则时会自动展开底部区域，也可用右上角按钮调整面板大小。
+
+“待处理”显示命中拦截规则的请求及服务端倒计时。可以编辑完整 JSON 和允许的请求头，查看字段差异，校验、保存、放行或取消。保存不重置倒计时；到期按规则转发已保存版本或取消。不同窗口的修改使用版本冲突提示，自动刷新不会覆盖本地草稿。
+
+“原始 / 出站”按需读取完整请求快照，与日志的正文展示上限分开。规则面板支持创建、编辑、启停、删除及等待时间、超时策略配置；待处理请求保留捕获时的策略。
+
+调用图的关联关系由后端 `/api/graph` 提供。前端使用 `/api/sessions` 和 WebSocket 事件同步日志，以 `revision` 防止旧快照覆盖更新。API 与本地代理启动方式见[项目 README](../README.md)。

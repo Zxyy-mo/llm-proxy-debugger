@@ -3,9 +3,10 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -13,38 +14,50 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/google/uuid"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/config"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/export"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/hub"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/intercept"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/protocol"
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/replay"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/store"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
 // Server 是反向代理的核心，实现 http.Handler。
 type Server struct {
-	target    *url.URL
-	transport *http.Transport
-	hub       *hub.Hub
-	store     *store.Store
-	logger    *zap.Logger
-	cfg       *config.Config
+	target        *url.URL
+	transport     *http.Transport
+	hub           *hub.Hub
+	store         *store.Store
+	logger        *zap.Logger
+	cfg           *config.Config
+	interceptions *intercept.Manager
+	replays       *replay.Manager
 }
 
 // NewServer 解析目标地址并初始化 Server。
 func NewServer(cfg *config.Config, log *zap.Logger, h *hub.Hub, s *store.Store) (*Server, error) {
+	if cfg.MaxBodyLogSize < 0 {
+		return nil, fmt.Errorf("maxbody must be non-negative")
+	}
 	targetURL, err := url.Parse(cfg.TargetAddr)
 	if err != nil {
 		return nil, fmt.Errorf("解析目标地址失败: %w", err)
 	}
 	return &Server{
-		target:    targetURL,
-		transport: newTransport(),
-		hub:       h,
-		store:     s,
-		logger:    log,
-		cfg:       cfg,
+		target:        targetURL,
+		transport:     newTransport(),
+		hub:           h,
+		store:         s,
+		logger:        log,
+		cfg:           cfg,
+		interceptions: intercept.New(func() { h.Publish(map[string]any{"event": "interceptions_updated"}) }),
+		replays:       replay.New(func() { h.Publish(map[string]any{"event": "replays_updated"}) }),
 	}, nil
 }
 
@@ -66,52 +79,176 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime time.Time, clientIP string) {
+	replayOpts := replayFrom(r.Context())
 	traceID := uuid.New().String()
-	sessionID := r.Header.Get("X-Session-ID")
-	if sessionID == "" {
-		sessionID = "default"
+	var replayInfo *store.ReplayInfo
+	if replayOpts != nil {
+		traceID = replayOpts.TraceID
+		info := replayOpts.Info
+		replayInfo = &info
 	}
-
-	// 协议选择
-	var handler protocol.Handler = &protocol.AnthropicHandler{}
-	if strings.Contains(r.URL.Path, "openai") || strings.Contains(r.URL.Path, "chat/completions") {
-		handler = &protocol.OpenAIHandler{}
-	}
-
-	// 确保会话存在
-	s.store.Lock()
-	if _, ok := s.store.Sessions[sessionID]; !ok {
-		s.store.Sessions[sessionID] = &store.Session{
-			ID:        sessionID,
-			CreatedAt: time.Now(),
-		}
-	}
-	s.store.Unlock()
-
-	// 广播请求开始事件
-	s.hub.Broadcast <- map[string]interface{}{
-		"event":      "request_start",
-		"trace_id":   traceID,
-		"session_id": sessionID,
-		"method":     r.Method,
-		"path":       r.URL.Path,
-		"time":       startTime.Format(time.RFC3339),
-	}
-
-	// 读取并缓存请求体（以便规则匹配和日志）
 	var requestBody []byte
+	var requestReadErr error
 	if r.Body != nil {
-		bodyBytes, err := io.ReadAll(r.Body)
-		if err == nil {
-			requestBody = bodyBytes
-			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		}
+		requestBody, requestReadErr = io.ReadAll(r.Body)
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(requestBody))
 	}
+	input := correlation.ExtractRequest(r.Header, r.URL.Path, requestBody, s.target.String())
+	var handler protocol.Handler = &protocol.AnthropicHandler{}
+	switch input.Protocol {
+	case "openai":
+		handler = &protocol.OpenAIHandler{}
+	case "responses":
+		handler = &protocol.ResponsesHandler{}
+	}
+	initial := s.store.Begin(store.RequestLog{
+		Time: startTime.Format(time.RFC3339Nano), TraceID: traceID,
+		Type: "HTTP", ClientIP: clientIP, Method: r.Method, Path: r.URL.Path,
+		Query: export.RedactQuery(r.URL.RawQuery), Headers: extractHeaders(r.Header),
+		RequestBody: truncateBody(requestBody, s.cfg.MaxBodyLogSize), UserAgent: r.UserAgent(),
+		Replay: replayInfo,
+	}, input)
+	s.store.CaptureOriginal(traceID, snapshotRequest(r, requestBody))
+	if replayOpts != nil {
+		replayOpts.markStarted()
+	}
+	w.Header().Set("X-Gateway-Trace-ID", traceID)
+	s.hub.Publish(map[string]interface{}{
+		"event": "request_start", "trace_id": traceID, "session_id": initial.SessionID,
+		"method": r.Method, "path": r.URL.Path, "time": initial.Time, "log": initial,
+	})
 
 	recorder := newResponseRecorder(w, traceID, handler, s.hub, s.logger, s.cfg.MaxBodyLogSize, filepath.Join(s.cfg.LogDir, "sse"))
 	defer recorder.close()
+	recorder.onResponse = func(response correlation.Response) {
+		if s.store.ObserveResponse(traceID, response) {
+			s.hub.Publish(map[string]interface{}{"event": "sessions_updated"})
+		}
+	}
 	target := s.target
 	var proxyErr error
+	var upstreamStarted time.Time
+	defer func() {
+		panicValue := recover()
+		if panicValue == http.ErrAbortHandler {
+			proxyErr = fmt.Errorf("response stream interrupted")
+		} else if panicValue != nil {
+			panic(panicValue)
+		}
+		response := recorder.capture.Response()
+		if proxyErr == nil && response.Error != "" {
+			proxyErr = fmt.Errorf("upstream: %s", response.Error)
+		}
+		if proxyErr == nil && recorder.isSSE && response.Recognized && !response.Complete {
+			proxyErr = fmt.Errorf("SSE stream ended without a completion event")
+		}
+		log := initial
+		log.StatusCode = recorder.statusCode
+		log.Duration = float64(time.Since(startTime).Microseconds()) / 1000
+		if !upstreamStarted.IsZero() {
+			log.UpstreamDuration = float64(time.Since(upstreamStarted).Microseconds()) / 1000
+		}
+		if status, err := s.interrupted(r, traceID); err != nil {
+			proxyErr = err
+			log.StatusCode = status
+		}
+		log.InputTokens, log.OutputTokens = recorder.accumulator.InputTokens, recorder.accumulator.OutputTokens
+		log.ThinkingTokens, log.ThinkingContent = recorder.accumulator.ThinkingTokens, recorder.accumulator.ThinkingContent
+		log.ToolUseCount, log.IsThinkingLoop = recorder.accumulator.ToolUseCount, recorder.accumulator.IsThinkingLoop
+		if recorder.isSSE {
+			log.Type = "SSE"
+			log.ResponseBody = truncateBody([]byte(recorder.accumulator.OutputContent), s.cfg.MaxBodyLogSize)
+		} else {
+			log.ResponseBody = truncateBody(recorder.body.Bytes(), s.cfg.MaxBodyLogSize)
+		}
+		if proxyErr != nil {
+			log.Error = proxyErr.Error()
+		}
+		log = s.store.Complete(traceID, log, response)
+		s.hub.Publish(map[string]interface{}{"event": "request_end", "trace_id": traceID, "log": log})
+		s.hub.Publish(map[string]interface{}{"event": "sessions_updated"})
+		s.asyncLog(log)
+		if panicValue != nil {
+			panic(panicValue)
+		}
+	}()
+	if requestReadErr != nil {
+		proxyErr = requestReadErr
+		http.Error(recorder, "读取请求体失败", http.StatusBadRequest)
+		return
+	}
+
+	outgoingBody, breakpoint := requestBody, (*store.Rule)(nil)
+	if replayOpts == nil || !replayOpts.SkipRules {
+		// Outgoing snapshots already contain rule injections; replaying them must
+		// not inject or pause a second time.
+		outgoingBody, breakpoint = s.prepareRequest(r.URL.Path, requestBody)
+	}
+	editBlockedReason := ""
+	if encoding := r.Header.Get("Content-Encoding"); (encoding != "" && !strings.EqualFold(encoding, "identity")) || !utf8.Valid(requestBody) {
+		editBlockedReason = "压缩或二进制请求只支持原样放行或取消；完整字节可在原始 / 出站视图中以 Base64 查看。"
+		outgoingBody = requestBody
+	}
+	if breakpoint != nil {
+		originalHeaders := intercept.EditableHeaders(r.Header)
+		pendingBody, pendingOriginal, bodyEncoding := string(outgoingBody), string(requestBody), ""
+		if editBlockedReason != "" {
+			pendingBody = base64.StdEncoding.EncodeToString(outgoingBody)
+			pendingOriginal = base64.StdEncoding.EncodeToString(requestBody)
+			bodyEncoding = "base64"
+		}
+		pending := s.interceptions.Add(r.Context(), intercept.Detail{
+			Summary: intercept.Summary{
+				Metadata: intercept.Metadata{RuleID: breakpoint.ID, TimeoutAction: breakpoint.TimeoutAction},
+				TraceID:  traceID, Method: r.Method, Path: r.URL.Path, Model: input.Model,
+			},
+			Body: pendingBody, Headers: originalHeaders,
+			OriginalBody: pendingOriginal, OriginalHeaders: originalHeaders,
+			EditBlockedReason: editBlockedReason,
+			BodyEncoding:      bodyEncoding,
+		}, time.Duration(breakpoint.WaitSeconds)*time.Second)
+		s.publishLog(s.store.SetInterception(traceID, pending.Metadata))
+		decision := s.interceptions.Wait(r.Context(), traceID)
+		s.publishLog(s.store.SetInterception(traceID, decision.Metadata))
+		if decision.State == "canceled" {
+			proxyErr = fmt.Errorf("request canceled: %s", decision.Reason)
+			status := http.StatusConflict
+			if decision.Reason == "timeout" {
+				status = http.StatusGatewayTimeout
+			}
+			if interruptedStatus, err := s.interrupted(r, traceID); err != nil {
+				proxyErr, recorder.statusCode = err, interruptedStatus
+			} else {
+				http.Error(recorder, proxyErr.Error(), status)
+			}
+			return
+		}
+		if decision.EditBlockedReason == "" {
+			outgoingBody = []byte(decision.Body)
+		}
+		if !maps.Equal(originalHeaders, decision.Headers) {
+			for name := range originalHeaders {
+				r.Header.Del(name)
+			}
+			for name, value := range decision.Headers {
+				r.Header.Set(name, value)
+			}
+		}
+	}
+	if status, err := s.interrupted(r, traceID); err != nil {
+		proxyErr = err
+		recorder.statusCode = status
+		return
+	}
+	if !bytes.Equal(outgoingBody, requestBody) {
+		r.Body = io.NopCloser(bytes.NewReader(outgoingBody))
+		r.ContentLength = int64(len(outgoingBody))
+		r.GetBody, r.TransferEncoding, r.Trailer = nil, nil, nil
+		r.Header.Del("Content-Length")
+		r.Header.Del("Transfer-Encoding")
+		s.publishLog(s.store.UpdateInput(traceID, correlation.ExtractRequest(r.Header, r.URL.Path, outgoingBody, s.target.String())))
+	}
 
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -124,36 +261,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 			}
 
 			req.Header.Del("Accept-Encoding")
-
-			// 动态规则注入
-			s.store.RLock()
-			rules := s.store.Rules
-			s.store.RUnlock()
-
-			for _, rule := range rules {
-				if !strings.Contains(req.URL.Path, rule.PathMatch) {
-					continue
-				}
-				if rule.BodyMatch != "" && !strings.Contains(string(requestBody), rule.BodyMatch) {
-					continue
-				}
-				if req.Body != nil && rule.InjectSystem != "" {
-					var payload map[string]any
-					if err := json.Unmarshal(requestBody, &payload); err == nil {
-						if sys, ok := payload["system"].(string); ok {
-							payload["system"] = sys + "\n\n" + rule.InjectSystem
-						} else {
-							payload["system"] = rule.InjectSystem
-						}
-						newBody, _ := json.Marshal(payload)
-						req.Body = io.NopCloser(bytes.NewBuffer(newBody))
-						req.ContentLength = int64(len(newBody))
-						req.Header.Set("Content-Length", fmt.Sprint(len(newBody)))
-					}
-				}
-			}
 		},
-		Transport: s.transport,
+		Transport: captureTransport{base: s.transport, capture: func(req *http.Request) {
+			upstreamStarted = time.Now()
+			s.store.CaptureOutgoing(traceID, snapshotRequest(req, outgoingBody))
+		}},
 		ModifyResponse: func(resp *http.Response) error {
 			contentType := resp.Header.Get("Content-Type")
 			if strings.Contains(contentType, "text/event-stream") {
@@ -163,94 +275,48 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 
 			if !recorder.isSSE && resp.Body != nil {
 				respBody, err := io.ReadAll(resp.Body)
-				if err == nil {
-					if resp.Header.Get("Content-Encoding") == "gzip" {
-						if reader, err := gzip.NewReader(bytes.NewReader(respBody)); err == nil {
-							decompressed, _ := io.ReadAll(reader)
-							reader.Close()
-							recorder.body.Write(decompressed)
-						}
-					} else {
-						if len(respBody) <= s.cfg.MaxBodyLogSize {
-							recorder.body.Write(respBody)
-						} else {
-							recorder.body.Write(respBody[:s.cfg.MaxBodyLogSize])
-						}
-					}
-					resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				resp.Body.Close()
+				if err != nil {
+					return fmt.Errorf("read upstream response: %w", err)
 				}
+				decoded := respBody
+				if resp.Header.Get("Content-Encoding") == "gzip" {
+					if reader, err := gzip.NewReader(bytes.NewReader(respBody)); err == nil {
+						if data, err := io.ReadAll(reader); err == nil {
+							decoded = data
+						}
+						reader.Close()
+					}
+				}
+				recorder.captureJSON(decoded)
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			}
 			return nil
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			proxyErr = err
+			if status, interruptedErr := s.interrupted(r, traceID); interruptedErr != nil {
+				proxyErr = interruptedErr
+				recorder.statusCode = status
+				return
+			}
 			s.logger.Error("❌ 代理请求失败", zap.String("trace_id", traceID), zap.Error(err))
 			http.Error(w, "代理请求失败", http.StatusBadGateway)
 		},
 	}
 
 	rp.ServeHTTP(recorder, r)
-
-	duration := time.Since(startTime)
-	reqType := "HTTP"
-	if recorder.isSSE {
-		reqType = "SSE"
-	}
-
-	reqLog := store.RequestLog{
-		Time:            startTime.Format("2006-01-02 15:04:05.000"),
-		TraceID:         traceID,
-		SessionID:       sessionID,
-		Type:            reqType,
-		ClientIP:        clientIP,
-		Method:          r.Method,
-		Path:            r.URL.Path,
-		Query:           r.URL.RawQuery,
-		Headers:         extractHeaders(r.Header),
-		RequestBody:     truncateBody(requestBody, s.cfg.MaxBodyLogSize),
-		StatusCode:      recorder.statusCode,
-		Duration:        float64(duration.Milliseconds()),
-		UserAgent:       r.UserAgent(),
-		InputTokens:     recorder.accumulator.InputTokens,
-		OutputTokens:    recorder.accumulator.OutputTokens,
-		ThinkingTokens:  recorder.accumulator.ThinkingTokens,
-		ThinkingContent: recorder.accumulator.ThinkingContent,
-		ToolUseCount:    recorder.accumulator.ToolUseCount,
-		IsThinkingLoop:  recorder.accumulator.IsThinkingLoop,
-	}
-
-	if recorder.isSSE {
-		reqLog.ResponseBody = truncateBody([]byte(recorder.accumulator.OutputContent), s.cfg.MaxBodyLogSize)
-	} else {
-		reqLog.ResponseBody = truncateBody(recorder.body.Bytes(), s.cfg.MaxBodyLogSize)
-	}
-
-	if proxyErr != nil {
-		reqLog.Error = proxyErr.Error()
-	}
-
-	// 存入会话
-	s.store.Lock()
-	if sess, ok := s.store.Sessions[sessionID]; ok {
-		sess.Logs = append(sess.Logs, reqLog)
-	}
-	s.store.Unlock()
-
-	// 广播请求结束事件
-	s.hub.Broadcast <- map[string]interface{}{
-		"event":    "request_end",
-		"trace_id": traceID,
-		"log":      reqLog,
-	}
-
-	s.asyncLog(reqLog)
 }
 
 func (s *Server) asyncLog(reqLog store.RequestLog) {
 	go func() {
 		s.logger.Info("📝 请求详情",
 			zap.String("trace_id", reqLog.TraceID),
+			zap.String("session_id", reqLog.SessionID),
+			zap.String("parent_trace_id", reqLog.Correlation.ParentTraceID),
+			zap.String("link_source", reqLog.Correlation.LinkSource),
+			zap.String("response_id", reqLog.Correlation.ResponseID),
 			zap.String("type", reqLog.Type),
 			zap.String("method", reqLog.Method),
 			zap.String("path", reqLog.Path),
@@ -261,6 +327,8 @@ func (s *Server) asyncLog(reqLog store.RequestLog) {
 			zap.String("thinking_content", truncateBody([]byte(reqLog.ThinkingContent), 500)),
 			zap.Int("tools", reqLog.ToolUseCount),
 			zap.Float64("duration_ms", reqLog.Duration),
+			zap.Float64("wait_duration_ms", reqLog.WaitDuration),
+			zap.Float64("upstream_duration_ms", reqLog.UpstreamDuration),
 			zap.Bool("loop", reqLog.IsThinkingLoop),
 			zap.String("error", reqLog.Error),
 		)

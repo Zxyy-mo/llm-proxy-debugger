@@ -45,9 +45,21 @@ func (acc *Accumulator) Accumulate(data []byte) {
 	} else {
 		acc.ThinkingTokens += metrics.ThinkingTokens
 	}
-	acc.ThinkingContent += metrics.ThinkingContent
-	acc.OutputContent += metrics.OutputContent
-	acc.ToolUseCount += metrics.ToolUseCount
+	if metrics.IsFinalThinkingContent {
+		acc.ThinkingContent = metrics.ThinkingContent
+	} else {
+		acc.ThinkingContent += metrics.ThinkingContent
+	}
+	if metrics.IsFinalContent {
+		acc.OutputContent = metrics.OutputContent
+	} else {
+		acc.OutputContent += metrics.OutputContent
+	}
+	if metrics.IsFinalToolUseCount {
+		acc.ToolUseCount = metrics.ToolUseCount
+	} else {
+		acc.ToolUseCount += metrics.ToolUseCount
+	}
 	if metrics.IsThinkingLoop {
 		acc.IsThinkingLoop = true
 	}

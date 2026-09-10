@@ -30,3 +30,18 @@ codex.md
 .ace-tool/
 .github/
 .claude/*
+
+# Local browser sessions, raw captures and personal workflow notes
+.playwright-cli/
+private-remote-workflow.md
+
+# Publish curated verification reports, scripts and synthetic screenshots only.
+output/**
+!output/playwright/
+!output/playwright/*/
+!output/playwright/*/verification.md
+!output/playwright/*/results.json
+!output/playwright/*/*.py
+!output/playwright/*/*.js
+!output/playwright/*/*.png
+output/playwright/*/live-*

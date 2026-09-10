@@ -37,7 +37,14 @@ func main() {
 	mux.Handle("/", srv)
 	mux.HandleFunc("/api/ws", h.ServeWS)
 	mux.HandleFunc("/api/sessions", s.SessionsHandler)
+	mux.HandleFunc("/api/graph", s.GraphHandler)
 	mux.HandleFunc("/api/rules", s.RulesHandler)
+	mux.HandleFunc("/api/rules/", s.RulesHandler)
+	mux.HandleFunc("/api/requests/", srv.RequestsHandler)
+	mux.HandleFunc("/api/interceptions", srv.InterceptionsHandler)
+	mux.HandleFunc("/api/interceptions/", srv.InterceptionsHandler)
+	mux.HandleFunc("/api/replays", srv.ReplaysHandler)
+	mux.HandleFunc("/api/replays/", srv.ReplaysHandler)
 
 	server := &http.Server{
 		Addr:         cfg.ListenAddr,

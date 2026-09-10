@@ -3,6 +3,7 @@ package hub
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -16,6 +17,15 @@ type Hub struct {
 	unregister chan *websocket.Conn
 	mu         sync.Mutex
 	logger     *zap.Logger
+}
+
+// Publish must never hold up a proxy deadline or a disconnected HTTP client.
+// The UI recovers dropped notifications from authoritative HTTP snapshots.
+func (h *Hub) Publish(message interface{}) {
+	select {
+	case h.Broadcast <- message:
+	default:
+	}
 }
 
 // New 创建并返回一个新的 Hub
@@ -47,6 +57,7 @@ func (h *Hub) Run() {
 		case message := <-h.Broadcast:
 			h.mu.Lock()
 			for client := range h.clients {
+				client.SetWriteDeadline(time.Now().Add(3 * time.Second))
 				err := client.WriteJSON(message)
 				if err != nil {
 					client.Close()

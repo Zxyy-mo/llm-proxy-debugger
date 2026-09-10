@@ -14,7 +14,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
 </script>
 
 <template>
-  <SplitterGroup v-bind="forwarded" :class="cn('flex h-full w-full data-[panel-group-direction=vertical]:flex-col', props.class)">
+  <SplitterGroup v-bind="forwarded" :class="cn('flex h-full min-h-0 w-full min-w-0 data-[panel-group-direction=vertical]:flex-col', props.class)">
     <slot />
   </SplitterGroup>
 </template>

@@ -2,7 +2,7 @@ import path from 'node:path'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-const BACKEND = process.env.BACKEND_URL ?? 'http://localhost:12666'
+const BACKEND = process.env.BACKEND_URL ?? 'http://localhost:12337'
 
 export default defineConfig({
   plugins: [vue()],

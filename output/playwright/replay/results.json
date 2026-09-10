@@ -1,0 +1,177 @@
+{
+ "date": "2026-09-10",
+ "environment": {
+  "proxy": "127.0.0.1:12338",
+  "vite": "localhost:5174",
+  "upstream": "127.0.0.1:28001",
+  "maxbody": 128,
+  "external_model_calls": 0
+ },
+ "go_tests": [
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/correlation\t2.531s",
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/export\t3.068s",
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/intercept\t3.615s",
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/proxy\t6.554s",
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/replay\t4.762s",
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/sse\t5.279s",
+  "ok  \tgithub.com/Zxyy-mo/llm-proxy-debugger/internal/store\t5.855s"
+ ],
+ "curl_panel": {
+  "trace": "4ea1a4ea-f57b-4958-86cb-b5a645466a68",
+  "clipboard_matches_api": true,
+  "download": "replay-4ea1a4ea-original.json",
+  "body_bytes": 150,
+  "page_errors": []
+ },
+ "curl_shell": {
+  "status": "PASS",
+  "trace": "52d4bc00-1ab8-417f-96e3-19303b47cedd",
+  "sources": {
+   "original": {
+    "destination": {
+     "kind": "gateway",
+     "url": "http://127.0.0.1:12338/v1/responses?trace=qa"
+    },
+    "status": "PASS",
+    "upstream_body_matches": true,
+    "env_credentials_used": true,
+    "gateway_recorded_trace": "325b4dcd-5e65-4552-8f9f-f204bc810df2",
+    "gateway_original_bytes_match": true
+   },
+   "outgoing": {
+    "destination": {
+     "kind": "upstream",
+     "url": "http://127.0.0.1:28001/v1/responses?trace=qa"
+    },
+    "status": "PASS",
+    "upstream_body_matches": true,
+    "env_credentials_used": true
+   }
+  }
+ },
+ "workbench": {
+  "edited_replay": {
+   "trace": "6d3a14d7-8ed2-49c4-8a5e-e653d51801ea",
+   "upstream_auth": "replay",
+   "injected_once": true
+  },
+  "provenance": {
+   "inspector": true,
+   "graph_badge": true,
+   "replay_edges": 1,
+   "jump_back": true
+  },
+  "cancel": {
+   "state": "canceled",
+   "log_status": "canceled",
+   "status_code": 499
+  },
+  "timeout": {
+   "state": "error",
+   "status_code": 504
+  },
+  "reload_read_only": true,
+  "page_errors": []
+ },
+ "layouts": {
+  "status": "PASS",
+  "layouts": [
+   {
+    "width": 1600,
+    "height": 1000,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   },
+   {
+    "width": 1366,
+    "height": 768,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   },
+   {
+    "width": 1024,
+    "height": 768,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   },
+   {
+    "width": 768,
+    "height": 600,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   },
+   {
+    "width": 390,
+    "height": 844,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   },
+   {
+    "width": 320,
+    "height": 640,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   },
+   {
+    "width": 844,
+    "height": 390,
+    "copy_reachable": true,
+    "run_reachable": true,
+    "validate_reachable": true,
+    "credential_reachable": true,
+    "editor_visible_height": 213,
+    "horizontal_overflow": false
+   }
+  ],
+  "page_errors": []
+ },
+ "api_cases": {
+  "idempotency": {
+   "first_status": 202,
+   "retry_status": 200,
+   "same_record": true,
+   "changed_content_status": 409,
+   "upstream_calls": 1
+  },
+  "never_forwarded": {
+   "outgoing_replay_status": 422,
+   "outgoing_curl_status": 404,
+   "original_replay_state": "done"
+  },
+  "sse_replay": {
+   "state": "done",
+   "type": "SSE",
+   "response": "streamed answer",
+   "output_tokens": 2
+  },
+  "credential_isolation": {
+   "api_snapshots": "clean",
+   "log_dir_grep": "clean"
+  },
+  "status": "PASS"
+ }
+}

@@ -33,11 +33,19 @@ func extractHeaders(h http.Header) map[string]string {
 	headers := make(map[string]string)
 	importantHeaders := []string{
 		"Content-Type",
+		"Content-Encoding",
 		"Authorization",
 		"X-API-Key",
 		"Accept",
 		"Origin",
 		"Referer",
+		"X-Session-ID",
+		"X-Conversation-ID",
+		"X-Thread-ID",
+		"X-Parent-Trace-ID",
+		"Anthropic-Version",
+		"Anthropic-Beta",
+		"OpenAI-Beta",
 	}
 	for _, key := range importantHeaders {
 		if v := h.Get(key); v != "" {

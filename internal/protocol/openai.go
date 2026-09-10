@@ -2,10 +2,8 @@ package protocol
 
 import "github.com/tidwall/gjson"
 
-// OpenAIHandler 适配 OpenAI 协议
-// 思考字段按优先级匹配：
-//   - reasoning_content: OpenAI 官方 / DeepSeek 等
-//   - reasoning: Qwen3 / 部分 vLLM 部署
+// OpenAIHandler handles Chat Completions JSON and SSE, including reasoning
+// fields explicitly emitted by compatible providers such as DeepSeek/Qwen.
 type OpenAIHandler struct{}
 
 func (h *OpenAIHandler) Name() string { return "openai" }
@@ -13,43 +11,44 @@ func (h *OpenAIHandler) Name() string { return "openai" }
 var reasoningFieldCandidates = []string{"reasoning_content", "reasoning"}
 
 func (h *OpenAIHandler) Parse(data []byte) (*Metrics, error) {
-	if len(data) == 0 {
+	if !gjson.ValidBytes(data) {
 		return nil, nil
 	}
-	jsonStr := string(data)
-
-	delta := gjson.Get(jsonStr, "choices.0.delta")
+	root := gjson.ParseBytes(data)
+	delta := root.Get("choices.0.delta")
 	if !delta.Exists() {
-		usage := gjson.Get(jsonStr, "usage")
-		if usage.Exists() {
-			return &Metrics{
-				InputTokens:           int(usage.Get("prompt_tokens").Int()),
-				OutputTokens:          int(usage.Get("completion_tokens").Int()),
-				ThinkingTokens:        int(usage.Get("completion_tokens_details.reasoning_tokens").Int()),
-				IsFinalOutputTokens:   true,
-				IsFinalThinkingTokens: true,
-			}, nil
-		}
-		return nil, nil
+		delta = root.Get("choices.0.message")
 	}
-
 	metrics := &Metrics{}
 	if content := delta.Get("content"); content.Type == gjson.String {
-		s := content.String()
-		metrics.OutputContent = s
-		metrics.OutputTokens = len([]rune(s))
+		metrics.OutputContent = content.String()
+		metrics.OutputTokens = len([]rune(content.String()))
 	}
-	// 遇到 null / 缺失都会跳过，继续尝试下一个候选字段
 	for _, key := range reasoningFieldCandidates {
-		r := delta.Get(key)
-		if r.Type != gjson.String {
-			continue
+		if content := delta.Get(key); content.Type == gjson.String {
+			metrics.ThinkingContent = content.String()
+			metrics.ThinkingTokens = len([]rune(content.String()))
+			break
 		}
-		s := r.String()
-		metrics.ThinkingContent = s
-		metrics.ThinkingTokens = len([]rune(s))
-		break
 	}
-
+	for _, call := range delta.Get("tool_calls").Array() {
+		if call.Get("id").String() != "" {
+			metrics.ToolUseCount++
+		}
+	}
+	if delta.Get("function_call.name").String() != "" {
+		metrics.ToolUseCount++
+	}
+	if usage := root.Get("usage"); usage.IsObject() {
+		metrics.InputTokens = int(usage.Get("prompt_tokens").Int())
+		if value := usage.Get("completion_tokens"); value.Exists() {
+			metrics.OutputTokens = int(value.Int())
+			metrics.IsFinalOutputTokens = true
+		}
+		if value := usage.Get("completion_tokens_details.reasoning_tokens"); value.Exists() {
+			metrics.ThinkingTokens = int(value.Int())
+			metrics.IsFinalThinkingTokens = true
+		}
+	}
 	return metrics, nil
 }

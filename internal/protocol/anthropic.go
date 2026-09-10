@@ -2,7 +2,6 @@ package protocol
 
 import "github.com/tidwall/gjson"
 
-// AnthropicHandler 适配 Anthropic/Claude 协议
 type AnthropicHandler struct {
 	thinkingStreak int
 }
@@ -10,44 +9,58 @@ type AnthropicHandler struct {
 func (h *AnthropicHandler) Name() string { return "anthropic" }
 
 func (h *AnthropicHandler) Parse(data []byte) (*Metrics, error) {
-	if len(data) == 0 {
+	if !gjson.ValidBytes(data) {
 		return nil, nil
 	}
-	jsonStr := string(data)
-	eventType := gjson.Get(jsonStr, "type").String()
-
-	metrics := &Metrics{EventType: eventType}
-
-	switch eventType {
-	case "message_start":
-		metrics.InputTokens = int(gjson.Get(jsonStr, "message.usage.input_tokens").Int())
-	case "thinking_delta":
-		content := gjson.Get(jsonStr, "thinking").String()
-		metrics.ThinkingContent = content
-		delta := len([]rune(content))
-		metrics.ThinkingTokens = delta
-		metrics.OutputTokens = delta
-		h.thinkingStreak++
-		if h.thinkingStreak > 15 {
-			metrics.IsThinkingLoop = true
+	root := gjson.ParseBytes(data)
+	kind := root.Get("type").String()
+	metrics := &Metrics{EventType: kind}
+	switch kind {
+	case "message":
+		for _, block := range root.Get("content").Array() {
+			switch block.Get("type").String() {
+			case "text":
+				metrics.OutputContent += block.Get("text").String()
+			case "thinking":
+				metrics.ThinkingContent += block.Get("thinking").String()
+			case "tool_use":
+				metrics.ToolUseCount++
+			}
 		}
+		metrics.InputTokens = int(root.Get("usage.input_tokens").Int())
+		metrics.OutputTokens = int(root.Get("usage.output_tokens").Int())
+		metrics.IsFinalOutputTokens = root.Get("usage.output_tokens").Exists()
+	case "message_start":
+		metrics.InputTokens = int(root.Get("message.usage.input_tokens").Int())
+	case "thinking_delta":
+		metrics.ThinkingContent = root.Get("thinking").String()
 	case "content_block_delta":
-		if gjson.Get(jsonStr, "delta.type").String() == "text" {
-			text := gjson.Get(jsonStr, "delta.text").String()
-			metrics.OutputContent = text
-			metrics.OutputTokens = len([]rune(text))
+		switch root.Get("delta.type").String() {
+		case "text_delta", "text":
+			metrics.OutputContent = root.Get("delta.text").String()
+			metrics.OutputTokens = len([]rune(metrics.OutputContent))
 			h.thinkingStreak = 0
+		case "thinking_delta":
+			metrics.ThinkingContent = root.Get("delta.thinking").String()
 		}
 	case "content_block_start":
-		if gjson.Get(jsonStr, "content_block.type").String() == "tool_use" {
+		if root.Get("content_block.type").String() == "tool_use" {
 			metrics.ToolUseCount = 1
 			h.thinkingStreak = 0
 		}
 	case "message_delta":
-		if usage := gjson.Get(jsonStr, "usage"); usage.Exists() {
-			metrics.OutputTokens = int(usage.Get("output_tokens").Int())
+		if value := root.Get("usage.output_tokens"); value.Exists() {
+			metrics.OutputTokens = int(value.Int())
 			metrics.IsFinalOutputTokens = true
 		}
+	}
+	if metrics.ThinkingContent != "" {
+		metrics.ThinkingTokens = len([]rune(metrics.ThinkingContent))
+		if !metrics.IsFinalOutputTokens {
+			metrics.OutputTokens += metrics.ThinkingTokens
+		}
+		h.thinkingStreak++
+		metrics.IsThinkingLoop = h.thinkingStreak > 15
 	}
 	return metrics, nil
 }

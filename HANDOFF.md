@@ -7,6 +7,7 @@
 - [README](README.md)：运行方式、主要 API、实际边界。
 - [排障使用指南](docs/USAGE.md)：定位、上下文、重放、结果评估和恢复。
 - [功能清单](FEATURE_CHECKLIST.md) / [交付路线](IMPLEMENTATION_ROADMAP.md)：当前阶段已交付内容。
+- [开发与提交约定](CONTRIBUTING.md)：中文提交说明，以及重要函数和关键步骤的中文注释要求。
 - [契约索引](docs/README.md)：精确的字段、状态机与限制。
 - [验收报告](output/playwright/foundation/verification.md) / [结构化结果](output/playwright/foundation/results.json)：可复核证据。
 - 最新证据：[基础修复](output/playwright/foundation-refinement/verification.md)、[排障流程](output/playwright/agent-debug-loop/verification.md)。
@@ -74,3 +75,7 @@ Windows 文本读写始终显式 UTF-8。`Get-Content` 必须带 `-Encoding UTF8
 9. 部署默认本机监听和 TLS 校验；管理 API 不是多租户安全边界。
 
 实际排障流程已验收：请求定位、上下文检查、草稿与执行状态保持、可恢复的重放和结果评估均可使用。完整 Agent 执行器、更多 SDK 自动插桩、全协议转换或高容量存储仍作为独立需求定义。
+
+## 下一阶段已确认方向
+
+用户已确认采用“会话 → 一轮任务 → 模型请求 → 上游执行尝试”的四层模型，并优先接入 CPA、New API、Sub2API 和 vLLM 的 OpenAI 兼容接口。具体范围和关联边界见 [实施路线](IMPLEMENTATION_ROADMAP.md#已确认的下一阶段方向)；这些是后续实现目标，尚未纳入当前验收结论。

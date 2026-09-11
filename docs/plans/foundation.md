@@ -1,6 +1,6 @@
 # Current-branch foundation decisions
 
-Status: implemented and verified on `refactor/modular-structure`, 2026-09-10. This branch is the product baseline. Existing modular proxy, correlation, interception and replay behavior remains the compatibility starting point.
+Status: implemented and verified on `refactor/modular-structure`, 2026-09-10. Ongoing development now uses `feat/agent-debugger-workflow`. Existing modular proxy, correlation, interception and replay behavior remains the compatibility starting point.
 
 ## Delivered stages
 

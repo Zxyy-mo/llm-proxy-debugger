@@ -1,6 +1,6 @@
 # 当前分支交接记录
 
-日期：2026-09-11。以 `refactor/modular-structure` 为持续开发基线。已拉取 `00ec270` 的基础交付，并完成会话隐私/清理、持久化重放登记、完整响应分页与实际 Agent 排障流程。
+日期：2026-09-11。当前开发分支为 `feat/agent-debugger-workflow`，从 `refactor/modular-structure` 的基础上继续演进。已拉取 `00ec270` 的基础交付，并在 `a9072cb` 完成会话隐私/清理、持久化重放登记、完整响应分页与实际 Agent 排障流程。
 
 ## 先看这些
 

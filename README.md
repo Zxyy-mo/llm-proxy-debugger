@@ -2,7 +2,7 @@
 
 面向个人开发者的 LLM 调试网关：捕获真实请求与响应，查看会话、上下文、工具与耗时，在 HTTP 请求发出前编辑，或从已捕获快照重放一次模型请求。
 
-当前产品基线是 **`refactor/modular-structure`**。已打通请求定位、上下文检查、修改重放和结果评估流程；入门见 [排障使用指南](docs/USAGE.md)，功能、支持边界和验收见 [清单](FEATURE_CHECKLIST.md)、[路线](IMPLEMENTATION_ROADMAP.md)、[最新验收](output/playwright/agent-debug-loop/verification.md)。
+当前开发分支是 **`feat/agent-debugger-workflow`**。已打通请求定位、上下文检查、修改重放和结果评估流程；入门见 [排障使用指南](docs/USAGE.md)，功能、支持边界和验收见 [清单](FEATURE_CHECKLIST.md)、[路线](IMPLEMENTATION_ROADMAP.md)、[最新验收](output/playwright/agent-debug-loop/verification.md)。
 
 ## 现在可以做什么
 

@@ -1,6 +1,6 @@
 # Development documentation
 
-The versioned contracts below describe the current `refactor/modular-structure` implementation. Local assistant settings, runtime data and developer journals stay outside the shared deliverables.
+The versioned contracts below describe the current `feat/agent-debugger-workflow` implementation. Local assistant settings, runtime data and developer journals stay outside the shared deliverables.
 
 ## Implemented contracts
 

@@ -1,6 +1,6 @@
 # 功能与交付清单
 
-更新日期：2026-09-11。基线：`refactor/modular-structure`。这里记录可使用的功能；Provider 本身未提供的能力和完整 Agent 执行器不计为已实现。
+更新日期：2026-09-11。当前开发分支：`feat/agent-debugger-workflow`。这里记录可使用的功能；Provider 本身未提供的能力和完整 Agent 执行器不计为已实现。
 
 ## 实际排障流程
 

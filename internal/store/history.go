@@ -146,7 +146,7 @@ func (s *Store) HistoryHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 	s.Lock()
 	deleted := map[string]bool{}
-	scopes := map[string]bool{}
+	removedRecords := map[string]*record{}
 	files := []string{}
 	skipped := 0
 	for id, rec := range s.records {
@@ -158,7 +158,7 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 			continue
 		}
 		deleted[id] = true
-		scopes[rec.input.Scope] = true
+		removedRecords[id] = rec
 		if rec.capture != nil {
 			files = append(files, rec.capture.Original.FilePath)
 			if rec.capture.Outgoing != nil {
@@ -184,8 +184,24 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 		}
 	}
 	for key, id := range s.aliases {
-		if deleted[id] {
+		removed := removedRecords[id]
+		if removed == nil {
+			continue
+		}
+		// Only a survivor with its own matching identity evidence can inherit
+		// an alias. An inferred descendant may later detach after an edit.
+		var successor *record
+		for _, candidate := range s.records {
+			if candidate.input.Scope == removed.input.Scope && candidate.log.SessionID == removed.log.SessionID &&
+				candidate.hasIdentityAlias(key) &&
+				(successor == nil || candidate.sequence < successor.sequence) {
+				successor = candidate
+			}
+		}
+		if successor == nil {
 			delete(s.aliases, key)
+		} else {
+			s.aliases[key] = successor.log.TraceID
 		}
 	}
 	visibleSessions := map[string]bool{}
@@ -206,13 +222,11 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 			delete(s.sessions, id)
 		}
 	}
-	// Removing history also removes retained reveal mappings for its credential
-	// scope. Remaining requests stay replayable from their own retained snapshots.
+	// A surviving capture still owns its immutable namespace, even if later
+	// correlation moved it elsewhere or it was loaded from legacy history.
 	keep := map[string]bool{}
 	for _, rec := range s.records {
-		if !scopes[rec.input.Scope] {
-			keep[rec.input.Scope] = true
-		}
+		keep[rec.privacyScope] = true
 	}
 	s.Privacy.ForgetScopes(keep)
 	s.revision++
@@ -238,4 +252,18 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 		}
 	}
 	return len(deleted), skipped, failure
+}
+
+func (rec *record) hasIdentityAlias(key string) bool {
+	for _, identity := range rec.input.Identities {
+		if referenceKey(rec.input.Scope, identity.Kind, identity.Value) == key {
+			return true
+		}
+	}
+	// Conversation IDs observed in a response are explicit identity evidence
+	// too; membership or an inferred parent link alone is not evidence.
+	if id := rec.log.Correlation.ConversationID; id != "" {
+		return referenceKey(rec.input.Scope, "conversation", id) == key
+	}
+	return false
 }

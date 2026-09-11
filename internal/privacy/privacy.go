@@ -115,8 +115,8 @@ func (e *Engine) RestoreState(state State) error {
 	return nil
 }
 
-// Token identity is scoped to an upstream/authentication fingerprint, never to
-// credentials themselves. This also stays stable when inferred sessions merge.
+// Token identity uses the caller's opaque capture namespace, never credentials
+// themselves. The store freezes conversation namespaces before first projection.
 func (e *Engine) Text(policy Policy, scope, text string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -230,6 +230,29 @@ func (e *Engine) Reveal(scope, body string) (string, error) {
 	}
 	raw, _ := json.Marshal(visit(value))
 	return string(raw), nil
+}
+
+// RetainAliases preserves only known tokens literally referenced by copied
+// text. The caller must verify common identity and both captures' retention
+// policies. It does not reveal or rewrite text, or import an entire namespace.
+func (e *Engine) RetainAliases(from, to, text string) {
+	if from == to {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, token := range placeholder.FindAllString(text, -1) {
+		value, known := e.state.Values[from][token]
+		if !known {
+			continue
+		}
+		if e.state.Values[to] == nil {
+			e.state.Values[to] = map[string]string{}
+		}
+		if _, retained := e.state.Values[to][token]; !retained {
+			e.state.Values[to][token] = value
+		}
+	}
 }
 
 func (e *Engine) ForgetScopes(keep map[string]bool) {

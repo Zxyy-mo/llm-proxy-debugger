@@ -79,6 +79,7 @@ func (s *Store) UpdateInput(traceID string, input correlation.Request) RequestLo
 	}
 	changed := rec.input.ContextHash != input.ContextHash || !slices.Equal(rec.input.Messages, input.Messages)
 	rec.input = input
+	rec.privacyHistory = nil
 	if session := s.sessions[rec.log.SessionID]; session.Label == rec.log.Summary {
 		session.Label = input.Summary
 	}
@@ -107,13 +108,61 @@ func (s *Store) UpdateInput(traceID string, input correlation.Request) RequestLo
 	return s.displayLog(rec)
 }
 
+// UpdateOutboundInput indexes the privacy-substituted transcript without
+// treating substitution itself as new conversation evidence. Keep only the
+// bounded pre-substitution fingerprints so a client resubmitting its original
+// prompt plus the actual assistant reply can match the same conversation.
+func (s *Store) UpdateOutboundInput(traceID string, input correlation.Request) RequestLog {
+	s.Lock()
+	defer s.Unlock()
+	rec := s.records[traceID]
+	if rec == nil {
+		return RequestLog{}
+	}
+	before := rec.input
+	stateful := before.PreviousResponseID != ""
+	if before.Protocol == "responses" {
+		for _, id := range before.Identities {
+			stateful = stateful || id.Kind == "conversation"
+		}
+	}
+	if rec.privacy.Outbound && !stateful && len(before.Messages) > 0 {
+		rec.privacyHistory = &correlation.Request{
+			ContextHash: before.ContextHash, Messages: slices.Clone(before.Messages), HasUser: before.HasUser,
+		}
+	}
+	// Privacy can substitute JSON identity values, but that is not a change
+	// to the explicit evidence captured at admission. Keep it available for
+	// alias ownership and later correlation while indexing outgoing messages.
+	input.Identities = slices.Clone(before.Identities)
+	input.ParentTraceID, input.PreviousResponseID = before.ParentTraceID, before.PreviousResponseID
+	rec.input = input
+	if session := s.sessions[rec.log.SessionID]; session.Label == rec.log.Summary {
+		session.Label = input.Summary
+	}
+	rec.log.Model, rec.log.Protocol, rec.log.Summary = input.Model, input.Protocol, input.Summary
+	s.touch(rec)
+	return s.displayLog(rec)
+}
+
 // Begin records a request before forwarding it. Running requests therefore
 // survive a browser reload and can already act as explicit trace parents.
 func (s *Store) Begin(log RequestLog, input correlation.Request, frozen ...privacy.Policy) RequestLog {
+	return s.begin(log, input, nil, frozen)
+}
+
+// BeginWithBody allocates correlation and privacy identity before projecting
+// the complete body and applying the display limit, all under one store lock.
+// Snapshots can never observe a raw or credential-scoped intermediate preview.
+func (s *Store) BeginWithBody(log RequestLog, input correlation.Request, body []byte, limit int, frozen ...privacy.Policy) RequestLog {
+	return s.begin(log, input, &requestPreview{body: body, limit: limit}, frozen)
+}
+
+func (s *Store) begin(log RequestLog, input correlation.Request, preview *requestPreview, frozen []privacy.Policy) RequestLog {
 	s.Lock()
 	defer s.Unlock()
 	if existing := s.records[log.TraceID]; existing != nil {
-		return copyLog(existing.log)
+		return s.displayLog(existing)
 	}
 	if log.Time == "" {
 		log.Time = time.Now().Format(time.RFC3339Nano)
@@ -144,14 +193,17 @@ func (s *Store) Begin(log RequestLog, input correlation.Request, frozen ...priva
 		log.Correlation.LinkSource = "previous_response_id"
 	}
 	label := input.Summary
+	summaryLabel := true
 	if len(input.Identities) > 0 {
 		primary := input.Identities[0]
 		log.SessionID, label = s.identitySession(input.Scope, primary), primary.Value
 		log.Correlation.SessionSource = primary.Source
+		summaryLabel = false
 	} else if log.Correlation.ParentReference != "" {
 		log.SessionID = "pending:" + referenceKey(input.Scope, log.Correlation.LinkSource, log.Correlation.ParentReference)[:24]
 		log.Correlation.SessionSource = log.Correlation.LinkSource
 		label = log.Correlation.ParentReference
+		summaryLabel = false
 	} else if log.Replay != nil {
 		// A replay without its own conversation evidence stays next to the request
 		// it reproduces. Membership is provenance, not a parent relation, so no
@@ -173,12 +225,10 @@ func (s *Store) Begin(log RequestLog, input correlation.Request, frozen ...priva
 		rec.privacy = frozen[0]
 	}
 	s.records[log.TraceID] = rec
-	if rec.privacy.Record && !rec.privacy.RetainRaw {
-		rec.log = s.displayLog(rec)
-		rec.input.Summary = rec.log.Summary
-		label = s.Privacy.Text(rec.privacy, rec.input.Scope, label)
-	}
-	s.ensureSession(rec, label)
+	createdSession := s.sessions[log.SessionID] == nil
+	// Initial correlation may move this record to an existing session. Keep
+	// provisional labels neutral until its final privacy namespace is allocated.
+	s.ensureSession(rec, "请求")
 	s.touch(rec)
 	for _, id := range input.Identities {
 		key := referenceKey(input.Scope, id.Kind, id.Value)
@@ -202,6 +252,43 @@ func (s *Store) Begin(log RequestLog, input correlation.Request, frozen ...priva
 	key := referenceKey(input.Scope, "trace", log.TraceID)
 	addIndex(s.owners, key, log.TraceID)
 	s.resolveWaiters(key)
+	rec.privacyScope = s.admissionPrivacyScope(rec)
+	if preview != nil {
+		s.setInitialPreview(rec, *preview)
+	}
+	if rec.privacy.Record {
+		rec.log.Summary = s.Privacy.Text(rec.privacy, rec.privacyScope, rec.log.Summary)
+		rec.input.Summary = rec.log.Summary
+		if !rec.privacy.RetainRaw {
+			rec.log = s.displayLog(rec)
+		}
+	}
+	if summaryLabel {
+		label = rec.log.Summary
+	}
+	if rec.privacy.Record {
+		label = s.Privacy.Text(rec.privacy, rec.privacyScope, label)
+	}
+	if createdSession {
+		visible := false
+		for _, candidate := range s.records {
+			if candidate.log.SessionID == log.SessionID {
+				visible = true
+				break
+			}
+		}
+		if visible {
+			if label == "" {
+				label = rec.log.Model
+			}
+			if label == "" {
+				label = log.SessionID
+			}
+			s.sessions[log.SessionID].Label = label
+		} else {
+			delete(s.sessions, log.SessionID)
+		}
+	}
 	return s.displayLog(rec)
 }
 
@@ -432,10 +519,16 @@ func (s *Store) Complete(traceID string, log RequestLog, response correlation.Re
 		if key := rec.input.CompletedKey(response); key != "" {
 			addIndex(s.history, key, traceID)
 		}
+		if rec.privacyHistory != nil {
+			if key := rec.privacyHistory.CompletedKey(response); key != "" {
+				addIndex(s.history, key, traceID)
+			}
+		}
 	}
-	// Completed requests only need one transcript index entry; retaining every
-	// replayed prefix here would grow quadratically across a long conversation.
+	// Keep only final transcript index entries (wire and optional pre-privacy),
+	// not every message prefix, to avoid quadratic growth in long conversations.
 	rec.input.Messages = nil
+	rec.privacyHistory = nil
 	return s.displayLog(rec)
 }
 
@@ -457,7 +550,7 @@ func (s *Store) SessionsSnapshot() map[string]*Session {
 		if result[id] == nil {
 			session := *s.sessions[id]
 			if rec.privacy.Record {
-				session.Label = s.Privacy.Text(rec.privacy, rec.input.Scope, session.Label)
+				session.Label = s.Privacy.Text(rec.privacy, rec.privacyScope, session.Label)
 			}
 			session.Logs = make([]RequestLog, 0)
 			result[id] = &session

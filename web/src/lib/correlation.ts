@@ -47,10 +47,28 @@ export function replayStateLabel(state?: string): string {
   return state ? labels[state] ?? state : '未知'
 }
 
-// Re-indents JSON text without parsing it, so number literals beyond 2^53,
-// key order and escape sequences survive a round trip through the editor.
+export const BODY_FORMAT_LIMITS = { inputChars: 512 * 1024, outputChars: 512 * 1024, depth: 64 } as const
+
+// Re-indent validated JSON text without rebuilding its values, so numeric
+// literals, key order and escapes survive editing. Large/deep/expanding input
+// stays byte-for-byte as supplied; formatting must never inflate an editor.
 export function formatBody(value?: string): string {
   if (!value) return ''
+  if (value.length > BODY_FORMAT_LIMITS.inputChars) return value
+  // Check depth before JSON.parse allocates a tree for an adversarial capture.
+  let scanDepth = 0
+  let scanString = false
+  let scanEscaped = false
+  for (const char of value) {
+    if (scanString) {
+      if (scanEscaped) scanEscaped = false
+      else if (char === '\\') scanEscaped = true
+      else if (char === '"') scanString = false
+    } else if (char === '"') scanString = true
+    else if (char === '{' || char === '[') {
+      if (++scanDepth > BODY_FORMAT_LIMITS.depth) return value
+    } else if ((char === '}' || char === ']') && --scanDepth < 0) return value
+  }
   try {
     JSON.parse(value)
   } catch {
@@ -61,10 +79,15 @@ export function formatBody(value?: string): string {
   let inString = false
   let escaped = false
   const indent = () => '\n' + '  '.repeat(depth)
+  const append = (text: string): boolean => {
+    if (out.length + text.length > BODY_FORMAT_LIMITS.outputChars) return false
+    out += text
+    return true
+  }
   for (let i = 0; i < value.length; i++) {
     const c = value[i]!
     if (inString) {
-      out += c
+      if (!append(c)) return value
       if (escaped) escaped = false
       else if (c === '\\') escaped = true
       else if (c === '"') inString = false
@@ -73,7 +96,7 @@ export function formatBody(value?: string): string {
     switch (c) {
       case '"':
         inString = true
-        out += c
+        if (!append(c)) return value
         break
       case '{':
       case '[': {
@@ -81,27 +104,27 @@ export function formatBody(value?: string): string {
         let j = i + 1
         while (j < value.length && /\s/.test(value[j]!)) j++
         if (value[j] === close) {
-          out += c + close
+          if (!append(c + close)) return value
           i = j
         } else {
           depth++
-          out += c + indent()
+          if (!append(c + indent())) return value
         }
         break
       }
       case '}':
       case ']':
         depth--
-        out += indent() + c
+        if (!append(indent() + c)) return value
         break
       case ',':
-        out += ',' + indent()
+        if (!append(',' + indent())) return value
         break
       case ':':
-        out += ': '
+        if (!append(': ')) return value
         break
       default:
-        if (!/\s/.test(c)) out += c
+        if (!/\s/.test(c) && !append(c)) return value
     }
   }
   return out

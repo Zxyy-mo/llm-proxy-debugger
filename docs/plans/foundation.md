@@ -32,9 +32,9 @@ Parent links need exact IDs or unique complete transcript evidence; shared sessi
 
 ## Privacy and persistence
 
-Patterns project JSON string values, using stable keyed placeholders scoped to upstream and client-authentication identity. Identity scoping survives automatic session merges; it is intentionally broader than one session ID. Policy is frozen at admission. Discarding originals disables exact reconstruction; explicit reveal requires retained mappings and a current opt-in.
+Patterns project JSON string values using keyed placeholders scoped to the admission-time conversation and upstream/client-authentication identity. Captures freeze that namespace, so later regrouping does not rewrite historical tokens; new captures do not inherit legacy credential-wide scopes. Cleanup keeps mappings referenced by surviving records, including the exact permitted token aliases copied with a tool result. Policy is frozen at admission. Discarding originals disables reconstruction; explicit reveal requires retained mappings and a current opt-in.
 
-SQLite currently stores a coalesced whole-metadata JSON snapshot row, with separate body files and in-memory query indices. The approximately 200 ms flush cycle and normal-exit flush support local recovery but leave a pre-flush crash window. Previously saved pending/running traffic becomes an interrupted error. Already persisted replay keys remain effective, without promising cross-crash exactly-once execution.
+SQLite stores a whole-metadata JSON snapshot row, with separate body files and in-memory query indices. Ordinary updates use an approximately 200 ms flush cycle; new replay registration is synchronously committed before dispatch, with rollback and no execution on save failure. Saved pending/running traffic restores as interrupted. Registered replay keys remain effective, without promising exactly-once completion; a crash before dispatch may leave a registered action that never executed.
 
 Backup includes metadata and body files. Capture paths are absolute and root checked. Cleanup protects active records, preserves missing-parent references and deletes owned files/reveal mappings.
 

@@ -1,0 +1,345 @@
+{
+  "date": "2026-09-11",
+  "base_commit": "00ec270",
+  "status": "accepted",
+  "checks": {
+    "go_race": "passed",
+    "go_vet": "passed",
+    "vue_build": "passed",
+    "independent_review": "passed"
+  },
+  "api": {
+    "checks": [
+      {
+        "name": "qa-large-json forwarded",
+        "passed": true
+      },
+      {
+        "name": "json exact full download",
+        "passed": true
+      },
+      {
+        "name": "json larger than 2 MiB",
+        "passed": true
+      },
+      {
+        "name": "qa-large-sse forwarded",
+        "passed": true
+      },
+      {
+        "name": "sse exact full download",
+        "passed": true
+      },
+      {
+        "name": "sse larger than 2 MiB",
+        "passed": true
+      },
+      {
+        "name": "qa-binary forwarded",
+        "passed": true
+      },
+      {
+        "name": "binary exact full download",
+        "passed": true
+      },
+      {
+        "name": "qa-empty forwarded",
+        "passed": true
+      },
+      {
+        "name": "empty exact full download",
+        "passed": true
+      },
+      {
+        "name": "large response replay completed",
+        "passed": true
+      },
+      {
+        "name": "duplicate replay uses same trace",
+        "passed": true
+      },
+      {
+        "name": "qa-response-only forwarded",
+        "passed": true
+      },
+      {
+        "name": "a1 recording projection exists",
+        "passed": true
+      },
+      {
+        "name": "a1 recording does not change forwarding",
+        "passed": true
+      },
+      {
+        "name": "qa-response-only forwarded",
+        "passed": true
+      },
+      {
+        "name": "a2 recording projection exists",
+        "passed": true
+      },
+      {
+        "name": "a2 recording does not change forwarding",
+        "passed": true
+      },
+      {
+        "name": "qa-response-only forwarded",
+        "passed": true
+      },
+      {
+        "name": "b recording projection exists",
+        "passed": true
+      },
+      {
+        "name": "b recording does not change forwarding",
+        "passed": true
+      },
+      {
+        "name": "same session stable placeholder",
+        "passed": true
+      },
+      {
+        "name": "independent sessions isolated",
+        "passed": true
+      },
+      {
+        "name": "unrelated session cannot reveal token",
+        "passed": true
+      },
+      {
+        "name": "same-session survivor retains response-only mapping",
+        "passed": true
+      },
+      {
+        "name": "qa-response-only forwarded",
+        "passed": true
+      },
+      {
+        "name": "new capture keeps session after first trace cleanup",
+        "passed": true
+      },
+      {
+        "name": "new capture keeps placeholder after first trace cleanup",
+        "passed": true
+      },
+      {
+        "name": "cleaned session does not affect another restore",
+        "passed": true
+      },
+      {
+        "name": "qa-failure forwarded",
+        "passed": true
+      },
+      {
+        "name": "qa-slow forwarded",
+        "passed": true
+      },
+      {
+        "name": "qa-tool forwarded",
+        "passed": true
+      }
+    ],
+    "traces": {
+      "json": "fecd1406-be05-4efb-a186-4a7d886d0ccc",
+      "sse": "712e6c57-48d0-4187-9dab-db7da10039b7",
+      "binary": "c1a32476-41a5-42b0-bfae-e4d09db4c287",
+      "empty": "4b753854-f236-4338-9739-4703a6d6043f",
+      "replay": "3853e579-7369-41c0-8010-59e82205237e",
+      "failure": "ac2dd08d-2e79-4373-a36c-9d6b1e5ed808",
+      "slow": "7b0f4e5b-25f8-4b17-97db-d57fa9fcc50d",
+      "tool": "8923d6f1-e1ca-48f6-b7b2-2a4a0f457b95"
+    },
+    "downloads": {
+      "json": {
+        "bytes": 3300341,
+        "sha256": "75a5930a764bf718deb27a6d2bbada4deb5652bd859f94b7b33fad3c6c973530"
+      },
+      "sse": {
+        "bytes": 3320981,
+        "sha256": "8744b8a3aa7aa4736221970cd9bd558a6c001efd7fd55a84f169f8f204e243a5"
+      },
+      "binary": {
+        "bytes": 307213,
+        "sha256": "6740d078f444802563c11f9393f6b04efff829ae6db4ebdf71f00a8707d6370a"
+      },
+      "empty": {
+        "bytes": 298,
+        "sha256": "c5a494eded42dc60a8232e3215b4104dbee58ba796c28e3291fb71587d79df13"
+      }
+    },
+    "replay": {
+      "id": "a57097ac-6bc2-46c0-8d3e-9622f22a26ea",
+      "trace_id": "3853e579-7369-41c0-8010-59e82205237e",
+      "replay_of": "fecd1406-be05-4efb-a186-4a7d886d0ccc",
+      "source": "outgoing",
+      "modified": false,
+      "state": "done",
+      "status_code": 200,
+      "created_at": "2026-09-10T18:01:52.90339Z",
+      "finished_at": "2026-09-10T18:01:52.974363Z",
+      "timeout_seconds": 600,
+      "idempotency_key": "qa-refinement-ae4e195d-2d54-42bc-bd65-a839c4d0b741"
+    },
+    "privacy_survivor": {
+      "trace": "1409e2ec-8fe5-4986-b8af-bb89045a3ac2",
+      "token": "[PRIVATE_email_1cf5d33a7345f4408392]"
+    }
+  },
+  "browser": {
+    "checks": [
+      {
+        "name": "seeded captures are available",
+        "passed": true
+      },
+      {
+        "name": "large JSON starts with the actual first part",
+        "passed": true
+      },
+      {
+        "name": "rendered JSON is bounded",
+        "passed": true
+      },
+      {
+        "name": "next part changes the range",
+        "passed": true
+      },
+      {
+        "name": "previous returns exact first text",
+        "passed": true
+      },
+      {
+        "name": "JSON end marker beyond 2 MiB is reachable",
+        "passed": true
+      },
+      {
+        "name": "final text has no replacement characters",
+        "passed": true
+      },
+      {
+        "name": "no next part at EOF",
+        "passed": true
+      },
+      {
+        "name": "refresh preserves the selected part",
+        "passed": true
+      },
+      {
+        "name": "reset returns to the first byte range",
+        "passed": true
+      },
+      {
+        "name": "SSE end marker and completion event are visible",
+        "passed": true
+      },
+      {
+        "name": "source paging does not move replay",
+        "passed": true
+      },
+      {
+        "name": "source final part is visible in comparison",
+        "passed": true
+      },
+      {
+        "name": "replay can page independently",
+        "passed": true
+      },
+      {
+        "name": "来源响应 fits 1440x900",
+        "passed": true
+      },
+      {
+        "name": "重放响应 fits 1440x900",
+        "passed": true
+      },
+      {
+        "name": "no page horizontal overflow 1440x900",
+        "passed": true
+      },
+      {
+        "name": "来源响应 fits 390x844",
+        "passed": true
+      },
+      {
+        "name": "重放响应 fits 390x844",
+        "passed": true
+      },
+      {
+        "name": "no page horizontal overflow 390x844",
+        "passed": true
+      },
+      {
+        "name": "来源响应 fits 320x640",
+        "passed": true
+      },
+      {
+        "name": "重放响应 fits 320x640",
+        "passed": true
+      },
+      {
+        "name": "no page horizontal overflow 320x640",
+        "passed": true
+      },
+      {
+        "name": "来源响应 fits 844x390",
+        "passed": true
+      },
+      {
+        "name": "重放响应 fits 844x390",
+        "passed": true
+      },
+      {
+        "name": "no page horizontal overflow 844x390",
+        "passed": true
+      },
+      {
+        "name": "missing-file state is explicit",
+        "passed": true
+      },
+      {
+        "name": "refresh recovers after missing-file fixture",
+        "passed": true
+      },
+      {
+        "name": "zero-byte state is readable",
+        "passed": true
+      },
+      {
+        "name": "zero-byte pagination cannot advance",
+        "passed": true
+      },
+      {
+        "name": "browser has no uncaught exceptions",
+        "passed": true
+      },
+      {
+        "name": "UI issued bounded reads beyond 2 MiB",
+        "passed": true
+      }
+    ],
+    "viewports": [
+      {
+        "width": 1440,
+        "height": 900,
+        "reachable": true
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "reachable": true
+      },
+      {
+        "width": 320,
+        "height": 640,
+        "reachable": true
+      },
+      {
+        "width": 844,
+        "height": 390,
+        "reachable": true
+      }
+    ],
+    "errors": [],
+    "source_trace": "fecd1406-be05-4efb-a186-4a7d886d0ccc",
+    "stream_trace": "712e6c57-48d0-4187-9dab-db7da10039b7"
+  }
+}

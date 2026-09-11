@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, defineAsyncComponent, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, defineAsyncComponent, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import {
   ResizablePanelGroup,
@@ -28,13 +28,19 @@ import RequestAudit from '@/components/RequestAudit.vue'
 import ResponsePanel from '@/components/ResponsePanel.vue'
 import GatewaySettings from '@/components/GatewaySettings.vue'
 import RoutingDetails from '@/components/RoutingDetails.vue'
+import RequestFinder from '@/components/RequestFinder.vue'
+import RequestActions from '@/components/RequestActions.vue'
+import ResponseComparison from '@/components/ResponseComparison.vue'
+import ToolDetails from '@/components/ToolDetails.vue'
 import { formatTokens, totalTokenLabel, timing } from '@/lib/metrics'
+import { findRequests, type RequestOrder } from '@/lib/requestFinder'
+import type { AuditMode, InvestigationAction } from '@/lib/investigation'
+import { initialReplayOperation, type ReplayOperationState } from '@/lib/replayOperation'
 import {
   PlusIcon,
   TerminalIcon,
   ActivityIcon,
   SettingsIcon,
-  Code2Icon,
   BrainCircuitIcon,
   Trash2Icon,
   ChevronUpIcon,
@@ -47,8 +53,8 @@ import {
   DiffIcon,
   PencilIcon,
 } from 'lucide-vue-next'
-import { fetchRules, fetchSessions, createRule, updateRule, deleteRule, connectWS } from '@/lib/api'
-import { formatBody, statusLabel } from '@/lib/correlation'
+import { APIError, fetchRules, fetchSessions, fetchRequestLog, createRule, updateRule, deleteRule, connectWS } from '@/lib/api'
+import { formatBody, formatDuration, statusLabel } from '@/lib/correlation'
 import type {
   LiveLog,
   LiveSession,
@@ -77,12 +83,28 @@ const wsStatus = ref<'connecting' | 'open' | 'closed'>('connecting')
 const activeView = ref<'graph' | 'details' | 'intercept' | 'audit' | 'manage'>(saved.view === 'details' || saved.view === 'intercept' || saved.view === 'audit' || saved.view === 'manage' ? saved.view : 'graph')
 const graphScope = ref<'session' | 'all'>(saved.scope === 'all' ? 'all' : 'session')
 const graphRefreshKey = ref(0)
+const graphFocusKey = ref(0)
 const pendingRefreshKey = ref(0)
 const replayRefreshKey = ref(0)
 const mobileInspectorOpen = ref(false)
 const showInspector = ref(true)
 const narrowLayout = useMediaQuery('(max-width: 1023px)')
-const stackPayloads = useMediaQuery('(max-width: 639px), (max-width: 1023px) and (min-height: 640px)')
+const requestQuery = ref('')
+const requestStatus = ref('')
+const requestOrder = ref<RequestOrder>('newest')
+const mobileFinderOpen = ref(false)
+const sessionLoading = ref(false)
+const sessionsLoaded = ref(false)
+const sessionError = ref('')
+const selectionLoading = ref(false)
+const selectionError = ref('')
+const auditSourceTraceId = ref<string | null>(typeof saved.auditTrace === 'string' ? saved.auditTrace : activeLogTraceId.value)
+const auditMode = ref<AuditMode>(saved.auditMode === 'context' || saved.auditMode === 'curl' || saved.auditMode === 'replay' ? saved.auditMode : 'compare')
+const replayOperation = ref<ReplayOperationState>(initialReplayOperation())
+const requestAudit = ref<InstanceType<typeof RequestAudit> | null>(null)
+const gatewaySettings = ref<InstanceType<typeof GatewaySettings> | null>(null)
+const historyReturnAvailable = ref(false)
+const comparisonElement = ref<HTMLElement | null>(null)
 const utilitiesPanel = ref<InstanceType<typeof ResizablePanel> | null>(null)
 const utilitiesExpanded = ref(false)
 const CallGraph = defineAsyncComponent(() => import('@/components/CallGraph.vue'))
@@ -95,17 +117,20 @@ let snapshotPoll: ReturnType<typeof setInterval> | undefined
 let refreshing = false
 let refreshAgain = false
 let disposed = false
+let selectionController: AbortController | undefined
 const observedDuringRefresh = new Set<string>()
 
-watch([activeSessionId, activeLogTraceId, activeView, graphScope], () => {
+watch([activeSessionId, activeLogTraceId, activeView, graphScope, auditSourceTraceId, auditMode], () => {
   try {
     localStorage.setItem('llm-debugger.selection', JSON.stringify({
       session: activeSessionId.value, trace: activeLogTraceId.value, view: activeView.value, scope: graphScope.value,
+      auditTrace: auditSourceTraceId.value, auditMode: auditMode.value,
     }))
   } catch {
     // Selection still works when browser storage is disabled.
   }
 })
+watch(activeView, view => { if (view !== 'graph') graphFocusKey.value = 0 })
 
 const sessionList = computed(() =>
   Object.values(sessions).sort((a, b) => {
@@ -124,6 +149,16 @@ const activeLog = computed<LiveLog | null>(() => {
   if (!s || !activeLogTraceId.value) return null
   return s.logs.find((l) => l.trace_id === activeLogTraceId.value) ?? null
 })
+const filteredLogs = computed(() => findRequests(activeSession.value?.logs ?? [], requestQuery.value, requestStatus.value, requestOrder.value))
+const selectedOutsideFilter = computed(() => Boolean(activeLog.value && !filteredLogs.value.some(log => log.trace_id === activeLogTraceId.value)))
+const comparisonSourceLog = computed(() => {
+  const trace = activeLog.value?.replay?.of
+  return trace ? findSessionByTrace(trace)?.logs.find(log => log.trace_id === trace) ?? null : null
+})
+const operationNeedsAttention = computed(() => replayOperation.value.phase === 'submitting' || replayOperation.value.phase === 'unknown' || replayOperation.value.record?.state === 'running')
+const showOperationBanner = computed(() => operationNeedsAttention.value && !(activeView.value === 'audit' && auditMode.value === 'replay'))
+
+function clearRequestFilter() { requestQuery.value = ''; requestStatus.value = ''; requestOrder.value = 'newest' }
 
 function lastLogTime(s: Session): number {
   if (!s.logs?.length) return new Date(s.created_at).getTime()
@@ -194,11 +229,14 @@ async function refreshSessions() {
     return
   }
   refreshing = true
+  sessionLoading.value = true
   observedDuringRefresh.clear()
   const before = new Set(allLogs.value.map((log) => log.trace_id))
   try {
     const data = await fetchSessions()
     if (disposed) return
+    sessionsLoaded.value = true
+    sessionError.value = ''
     const incoming = new Set<string>()
     for (const session of Object.values(data)) {
       const local = ensureSession(session.id)
@@ -229,6 +267,11 @@ async function refreshSessions() {
     }
     const selected = activeLogTraceId.value ? findSessionByTrace(activeLogTraceId.value) : null
     if (selected) activeSessionId.value = selected.id
+    else if (activeLogTraceId.value) {
+      // A replay/source link can be newer than this in-flight snapshot.
+      // Resolve it explicitly; never replace it with an unrelated latest call.
+      if (!selectionLoading.value && !selectionError.value) void resolveSelectedTrace(activeLogTraceId.value)
+    }
     else if (activeSessionId.value && sessions[activeSessionId.value]) {
       activeLogTraceId.value = sessions[activeSessionId.value]?.logs[0]?.trace_id ?? null
     }
@@ -242,9 +285,11 @@ async function refreshSessions() {
     }
     graphRefreshKey.value++
   } catch (e) {
+    sessionError.value = `加载会话失败：${String(e)}`
     logConsole(`[System] ❌ 加载会话失败: ${e}`)
   } finally {
     refreshing = false
+    sessionLoading.value = false
     if (refreshAgain) {
       refreshAgain = false
       scheduleSessionRefresh()
@@ -335,13 +380,19 @@ function findSessionByTrace(trace_id: string) {
 }
 
 function selectSession(id: string) {
+  selectionController?.abort()
+  selectionLoading.value = false
+  selectionError.value = ''
   activeSessionId.value = id
   const s = sessions[id]
   activeLogTraceId.value = s?.logs?.[0]?.trace_id ?? null
+  if (activeView.value === 'audit') auditSourceTraceId.value = activeLogTraceId.value
 }
 
-function selectLog(trace_id: string) {
-  activeLogTraceId.value = trace_id
+function selectLog(trace_id: string, focusFromList = true) {
+  void selectTrace(trace_id)
+  if (activeView.value === 'audit') auditSourceTraceId.value = trace_id
+  if (activeView.value === 'graph' && focusFromList) graphFocusKey.value++
   if (activeView.value === 'graph' && window.matchMedia('(max-width: 1279px)').matches) mobileInspectorOpen.value = true
 }
 
@@ -353,26 +404,85 @@ function selectGraphNode(node: GraphNode) {
     activeSessionId.value = node.session_id
     scheduleSessionRefresh()
   }
-  selectLog(node.trace_id)
+  selectLog(node.trace_id, false)
 }
 
 function selectPendingRequest(trace: string) {
-  const session = findSessionByTrace(trace)
-  if (session) {
-    activeSessionId.value = session.id
-    activeLogTraceId.value = trace
+  void selectTrace(trace)
+}
+
+async function resolveSelectedTrace(trace: string) {
+  selectionController?.abort()
+  const request = selectionController = new AbortController()
+  selectionLoading.value = true
+  selectionError.value = ''
+  try {
+    const log = await fetchRequestLog(trace, request.signal)
+    if (request.signal.aborted || activeLogTraceId.value !== trace) return
+    upsertLog(log.session_id, log.trace_id, toLiveLog(log))
+    // A newer live revision may have already moved this trace while the
+    // single-log read was in flight. Follow the accepted local record.
+    activeSessionId.value = findSessionByTrace(trace)?.id ?? log.session_id
+  } catch (e) {
+    if (!request.signal.aborted && activeLogTraceId.value === trace) selectionError.value = e instanceof APIError && e.status === 404 ? `请求 ${trace.slice(0, 8)} 已删除或尚未保存。可以重试，或选择其他请求。` : `无法读取选中的请求：${String(e)}`
+  } finally {
+    if (request === selectionController) { selectionLoading.value = false; selectionController = undefined }
   }
 }
 
-// Jump to a trace referenced by another view (replay source or result). The
-// session may not be known yet right after a replay starts; the next snapshot
-// refresh resolves it from the selected trace.
-function selectTrace(trace: string, view?: 'details') {
+async function selectTrace(trace: string, view?: 'details') {
+  selectionController?.abort()
+  selectionLoading.value = false
+  selectionError.value = ''
   const session = findSessionByTrace(trace)
   if (session) activeSessionId.value = session.id
-  else scheduleSessionRefresh()
   activeLogTraceId.value = trace
   if (view) activeView.value = view
+  if (!session) await resolveSelectedTrace(trace)
+}
+
+async function investigate(intent: InvestigationAction) {
+  mobileInspectorOpen.value = false
+  if (intent.action === 'context' || intent.action === 'replay') {
+    auditSourceTraceId.value = intent.trace
+    auditMode.value = intent.action
+    activeView.value = 'audit'
+    await selectTrace(intent.trace)
+    return
+  }
+  const log = findSessionByTrace(intent.trace)?.logs.find(item => item.trace_id === intent.trace)
+  await selectTrace(intent.action === 'source' && log?.replay ? log.replay.of : intent.trace, 'details')
+  if (intent.action === 'compare') {
+    await nextTick()
+    comparisonElement.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    comparisonElement.value?.focus({ preventScroll: true })
+  }
+}
+
+function openAuditForSelection() {
+  auditSourceTraceId.value = activeLogTraceId.value
+  activeView.value = 'audit'
+  if (auditSourceTraceId.value) void selectTrace(auditSourceTraceId.value)
+}
+
+function returnToWorkbench(trace = auditSourceTraceId.value) {
+  if (!trace) return
+  auditSourceTraceId.value = trace
+  auditMode.value = 'replay'
+  activeView.value = 'audit'
+  mobileInspectorOpen.value = false
+  void selectTrace(trace)
+}
+
+function returnToHistory() {
+  gatewaySettings.value?.openHistory()
+  activeView.value = 'manage'
+  mobileInspectorOpen.value = false
+}
+
+function openProviderSettings() {
+  gatewaySettings.value?.openProviders()
+  activeView.value = 'manage'
 }
 
 function changeMobileSession(event: Event) {
@@ -380,7 +490,8 @@ function changeMobileSession(event: Event) {
 }
 
 function changeMobileLog(event: Event) {
-  activeLogTraceId.value = (event.target as HTMLSelectElement).value
+  mobileFinderOpen.value = false
+  selectLog((event.target as HTMLSelectElement).value)
 }
 
 function toggleUtilities() {
@@ -388,8 +499,9 @@ function toggleUtilities() {
 }
 
 function openHistoricalLog(log: RequestLog) {
+  historyReturnAvailable.value = true
   upsertLog(log.session_id, log.trace_id, toLiveLog(log))
-  selectTrace(log.trace_id, 'details')
+  void selectTrace(log.trace_id, 'details')
 }
 
 function toggleRuleForm() {
@@ -435,6 +547,7 @@ onUnmounted(() => {
   clearTimeout(refreshTimer)
   clearInterval(snapshotPoll)
   ws?.close()
+  selectionController?.abort()
 })
 
 // Rules form state
@@ -540,7 +653,7 @@ async function submitRule() {
           <option v-if="!sessionList.length" value="">暂无会话</option>
           <option v-for="session in sessionList" :key="session.id" :value="session.id">{{ session.label || session.id }}</option>
         </select>
-        <Button variant="ghost" size="icon" class="hidden sm:inline-flex" aria-label="设置">
+        <Button variant="ghost" size="icon" class="h-8 w-8" aria-label="设置" @click="activeView = 'manage'">
           <SettingsIcon class="h-4 w-4" />
         </Button>
       </div>
@@ -585,8 +698,8 @@ async function submitRule() {
                       </Badge>
                     </div>
                   </button>
-                  <div v-if="!sessionList.length" class="text-xs text-muted-foreground italic px-1 py-2">
-                    No sessions yet.
+                  <div v-if="!sessionList.length" class="text-xs text-muted-foreground px-1 py-2">
+                    {{ sessionLoading ? '正在加载会话…' : sessionError ? '会话加载失败，请重试。' : '还没有捕获的会话。' }}
                   </div>
                 </div>
               </div>
@@ -596,14 +709,16 @@ async function submitRule() {
             <div class="flex flex-col min-h-0 border-t pt-3" style="flex: 1 1 0">
               <h3 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-1 mb-1">
                 <template v-if="activeSession">
-                  Logs ({{ activeSession.logs.length }})
+                  请求 ({{ filteredLogs.length }} / {{ activeSession.logs.length }})
                 </template>
                 <template v-else>Logs</template>
               </h3>
+              <RequestFinder v-if="!narrowLayout" v-model:query="requestQuery" v-model:status="requestStatus" v-model:order="requestOrder" :matched="filteredLogs.length" :total="activeSession?.logs.length ?? 0" class="mb-2" />
+              <p v-if="selectedOutsideFilter && !narrowLayout" class="mb-2 text-[10px] leading-relaxed text-amber-800">当前请求不在筛选结果中，已保留选择。<button type="button" class="underline" @click="clearRequestFilter">清除筛选</button></p>
               <div class="panel-scroll flex-1 -mx-1 px-1" aria-label="请求列表" tabindex="0">
                 <div class="space-y-1 pb-2">
                   <button
-                    v-for="log in activeSession?.logs ?? []"
+                    v-for="log in filteredLogs"
                     :key="log.trace_id"
                     type="button"
                     @click="selectLog(log.trace_id)"
@@ -626,14 +741,15 @@ async function submitRule() {
                     <div v-if="log.summary" class="mt-1 truncate text-[10px]">{{ log.summary }}</div>
                     <div class="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
                       <span>{{ totalTokens(log) }} tk</span>
-                      <span>{{ log.duration_ms ? `${log.duration_ms.toFixed(0)}ms` : '...' }}</span>
+                      <span>{{ log.status === 'running' || log.status === 'pending' ? statusLabel(log.status) : formatDuration(log.duration_ms) }}</span>
                     </div>
                   </button>
-                  <div v-if="activeSession && !activeSession.logs.length" class="text-xs text-muted-foreground italic px-1 py-2">
-                    No logs in this session.
+                  <div v-if="activeSession && !filteredLogs.length" class="text-xs text-muted-foreground px-1 py-2">
+                    {{ activeSession.logs.length ? '没有匹配的请求。' : '此会话还没有请求。' }}
+                    <Button v-if="activeSession.logs.length" variant="link" size="sm" class="h-auto px-0 py-1 text-xs" @click="clearRequestFilter">清除筛选</Button>
                   </div>
                   <div v-if="!activeSession" class="text-xs text-muted-foreground italic px-1 py-2">
-                    Select a session.
+                    选择一个会话查看请求。
                   </div>
                 </div>
               </div>
@@ -653,12 +769,12 @@ async function submitRule() {
                   <GitBranchIcon class="h-3.5 w-3.5" />调用画布
                 </Button>
                 <Button :variant="activeView === 'details' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'details'" @click="activeView = 'details'">
-                  <FileTextIcon class="h-3.5 w-3.5" />思考与报文
+                  <FileTextIcon class="h-3.5 w-3.5" />响应与详情
                 </Button>
                 <Button :variant="activeView === 'intercept' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'intercept'" @click="activeView = 'intercept'">
                   <PauseCircleIcon class="h-3.5 w-3.5 text-amber-600" />待处理 <Badge v-if="pendingCount" variant="secondary" class="h-4 px-1 text-[10px]">{{ pendingCount }}</Badge>
                 </Button>
-                <Button :variant="activeView === 'audit' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'audit'" @click="activeView = 'audit'">
+                <Button :variant="activeView === 'audit' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'audit'" @click="openAuditForSelection">
                   <DiffIcon class="h-3.5 w-3.5" />原始 / 出站
                 </Button>
                 <Button :variant="activeView === 'manage' ? 'secondary' : 'ghost'" size="sm" class="h-8 gap-1.5 text-xs" :aria-pressed="activeView === 'manage'" @click="activeView = 'manage'"><SettingsIcon class="h-3.5 w-3.5" />管理</Button>
@@ -668,101 +784,72 @@ async function submitRule() {
                 </select>
                 <Button v-if="activeView === 'graph'" variant="ghost" size="icon" class="h-7 w-7 shrink-0" aria-label="切换调用详情" title="显示或收起调用详情" @click="toggleInspector"><PanelRightIcon class="h-3.5 w-3.5" /></Button>
               </div>
+              <div v-if="sessionError && sessionList.length" role="alert" class="flex shrink-0 flex-wrap items-center gap-2 border-b bg-amber-50 px-3 py-2 text-xs text-amber-900"><span class="min-w-0 flex-1 break-words">{{ sessionError }}，当前保留上次加载的数据。</span><Button size="sm" variant="outline" class="h-7 text-xs" :disabled="sessionLoading" @click="refreshSessions">重试加载会话</Button></div>
+              <div v-if="selectionError" role="alert" class="flex shrink-0 flex-wrap items-center gap-2 border-b bg-amber-50 px-3 py-2 text-xs text-amber-900"><span class="min-w-0 flex-1 break-words">{{ selectionError }}</span><Button size="sm" variant="outline" class="h-7 text-xs" :disabled="selectionLoading" @click="activeLogTraceId && resolveSelectedTrace(activeLogTraceId)">重试读取请求</Button></div>
+              <div v-if="(auditSourceTraceId && activeView !== 'audit') || (historyReturnAvailable && activeView !== 'manage') || showOperationBanner" class="flex shrink-0 flex-wrap items-center gap-1.5 border-b bg-violet-50/40 px-3 py-1.5 text-[11px]" aria-label="调查导航">
+                <Button v-if="auditSourceTraceId && activeView !== 'audit'" size="sm" variant="ghost" class="h-7 text-[11px]" @click="returnToWorkbench()">返回重放工作台 · {{ auditSourceTraceId.slice(0, 8) }}</Button>
+                <Button v-if="historyReturnAvailable && activeView !== 'manage'" size="sm" variant="ghost" class="h-7 text-[11px]" @click="returnToHistory">返回历史查询</Button>
+                <template v-if="showOperationBanner"><span role="status" class="break-words text-violet-900">{{ replayOperation.phase === 'unknown' ? '有一笔重放尚未确认发送结果' : replayOperation.phase === 'submitting' ? '正在提交重放' : '有一笔重放进行中' }}</span><Button size="sm" variant="outline" class="h-7 text-[11px]" @click="returnToWorkbench(replayOperation.sourceTrace)">查看本次重放</Button><Button v-if="replayOperation.record?.state === 'running'" size="sm" variant="destructive" class="h-7 text-[11px]" :disabled="replayOperation.busy" @click="requestAudit?.cancelOperation()">取消重放</Button></template>
+              </div>
+              <details v-if="narrowLayout && activeView !== 'intercept' && activeView !== 'manage'" class="shrink-0 border-b bg-card px-3" :open="mobileFinderOpen" @toggle="mobileFinderOpen = ($event.target as HTMLDetailsElement).open">
+                <summary class="cursor-pointer py-2 text-[11px] font-medium">筛选请求 · {{ filteredLogs.length }} / {{ activeSession?.logs.length ?? 0 }}<span v-if="requestStatus || requestQuery" class="ml-2 text-teal-800">已筛选</span></summary>
+                <RequestFinder v-model:query="requestQuery" v-model:status="requestStatus" v-model:order="requestOrder" :matched="filteredLogs.length" :total="activeSession?.logs.length ?? 0" class="pb-2" />
+                <p v-if="selectedOutsideFilter" class="pb-2 text-[10px] text-amber-800">当前请求不在筛选结果中，已保留选择。</p>
+              </details>
               <div v-if="narrowLayout && activeView !== 'intercept' && activeView !== 'manage'" class="flex shrink-0 items-center gap-2 border-b bg-card px-3 py-2">
                 <label for="active-request" class="shrink-0 text-[11px] text-muted-foreground">当前请求</label>
                 <select id="active-request" class="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs" :value="activeLogTraceId ?? ''" @change="changeMobileLog">
-                  <option v-if="!activeSession?.logs.length" value="">暂无请求</option>
-                  <option v-for="log in activeSession?.logs ?? []" :key="log.trace_id" :value="log.trace_id">{{ log.model || log.method }} · {{ log.summary || log.path }}</option>
+                  <option v-if="!filteredLogs.length" value="" disabled>{{ activeSession?.logs.length ? '没有匹配的请求' : '暂无请求' }}</option>
+                  <option v-if="activeLogTraceId && !filteredLogs.some(log => log.trace_id === activeLogTraceId)" :value="activeLogTraceId">{{ activeLog ? `${activeLog.model || activeLog.method}（筛选外）` : `请求 ${activeLogTraceId.slice(0, 8)}` }}</option>
+                  <option v-for="log in filteredLogs" :key="log.trace_id" :value="log.trace_id">{{ statusLabel(log.status) }} · {{ log.model || log.method }} · {{ log.summary || log.path }}</option>
                 </select>
               </div>
-              <div v-if="activeView === 'graph'" class="flex min-h-0 flex-1 overflow-hidden">
+              <div v-if="(activeView === 'graph' || activeView === 'details') && !sessionList.length" class="panel-scroll flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center" aria-label="捕获状态">
+                <p v-if="sessionLoading && !sessionsLoaded" role="status" class="text-sm text-muted-foreground">正在加载捕获的调用…</p>
+                <template v-else-if="sessionError"><p role="alert" class="max-w-xl break-words text-sm text-destructive">{{ sessionError }}</p><Button size="sm" variant="outline" :disabled="sessionLoading" @click="refreshSessions">重试加载会话</Button></template>
+                <template v-else><h2 class="text-base font-semibold">开始捕获模型调用</h2><p class="max-w-md text-sm leading-relaxed text-muted-foreground">将 SDK 的 base_url 指向网关监听地址，发送一次模型请求。调用会自动出现在这里，随后可以查看上下文并重放。</p><div class="flex flex-wrap justify-center gap-2"><Button size="sm" variant="outline" @click="openProviderSettings">检查 Provider 与路由</Button><Button size="sm" variant="outline" :disabled="sessionLoading" @click="refreshSessions">刷新会话</Button></div></template>
+              </div>
+              <div v-else-if="activeView === 'graph'" class="flex min-h-0 flex-1 overflow-hidden">
                 <CallGraph
                   class="min-w-0 flex-1"
                   :session-id="graphScope === 'all' ? '' : activeSession?.id ?? null"
                   :refresh-key="graphRefreshKey"
+                  :focus-key="graphFocusKey"
                   :active-trace-id="activeLogTraceId"
                   :logs="allLogs"
                   @select="selectGraphNode"
                 />
-                <RequestInspector v-if="showInspector" class="hidden w-80 shrink-0 border-l xl:flex" :log="activeLog" @select="selectTrace" />
+                <RequestInspector v-if="showInspector" class="hidden w-80 shrink-0 border-l xl:flex" :log="activeLog" @select="selectTrace" @action="investigate" />
               </div>
-              <ResizablePanelGroup v-else-if="activeView === 'details'" :direction="stackPayloads ? 'vertical' : 'horizontal'" class="min-h-0 min-w-0 flex-1">
-                <!-- Thinking Stream -->
-                <ResizablePanel :default-size="50" :min-size="15" class="flex min-h-0 min-w-0 flex-col border-r relative">
-                  <div class="min-h-10 border-b flex flex-wrap items-center gap-2 px-3 py-2 bg-muted/20 shrink-0 justify-between">
-                    <div class="flex shrink-0 items-center">
-                      <BrainCircuitIcon class="h-4 w-4 mr-2 text-muted-foreground" />
-                      <h2 class="text-sm font-medium">Thinking Stream</h2>
-                    </div>
-                    <div v-if="activeLog" class="flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
-                      <Badge variant="secondary" class="h-4 text-[10px] px-1">in {{ formatTokens(activeLog.input_tokens, activeLog.token_sources?.input) }}</Badge>
-                      <Badge variant="secondary" class="h-4 text-[10px] px-1">out {{ formatTokens(activeLog.output_tokens, activeLog.token_sources?.output) }}</Badge>
-                      <Badge variant="secondary" class="h-4 text-[10px] px-1">think {{ formatTokens(activeLog.thinking_tokens, activeLog.token_sources?.thinking) }}</Badge>
-                      <Badge v-if="activeLog.is_thinking_loop" variant="destructive" class="h-4 text-[10px] px-1">loop!</Badge>
-                    </div>
+              <section v-else-if="activeView === 'details'" class="panel-scroll min-h-0 min-w-0 flex-1 space-y-4 p-3 sm:p-4" aria-label="响应与调用详情" tabindex="0">
+                <p v-if="!activeLog" role="status" class="p-5 text-sm text-muted-foreground">{{ selectionLoading ? '正在读取选中的请求…' : selectionError ? '此请求暂不可用，可重试或选择其他请求。' : '选择一个请求查看响应与调用详情。' }}</p>
+                <template v-else>
+                  <div class="space-y-3 rounded-lg border bg-card p-3 sm:p-4">
+                    <div class="flex flex-wrap items-center gap-2"><h2 class="min-w-0 break-words text-sm font-semibold">{{ activeLog.model || activeLog.path }}</h2><Badge :variant="activeLog.status === 'error' ? 'destructive' : 'secondary'" class="text-[10px]">{{ statusLabel(activeLog.status) }} {{ activeLog.status_code || '' }}</Badge><span class="break-all font-mono text-[10px] text-muted-foreground">{{ activeLog.trace_id }}</span></div>
+                    <p class="break-words text-xs leading-relaxed text-muted-foreground">{{ activeLog.summary || `${activeLog.method} ${activeLog.path}` }}</p>
+                    <RequestActions :log="activeLog" @action="investigate" />
+                    <div class="flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-muted-foreground"><span>输入 {{ formatTokens(activeLog.input_tokens, activeLog.token_sources?.input) }}</span><span>输出 {{ formatTokens(activeLog.output_tokens, activeLog.token_sources?.output) }}</span><span>总耗时 {{ activeLog.status === 'running' || activeLog.status === 'pending' ? statusLabel(activeLog.status) : formatDuration(activeLog.duration_ms) }}</span><span>等待 {{ activeLog.status === 'pending' ? '等待中' : timing(activeLog.wait_duration_ms) }}</span><span>上游 {{ activeLog.status === 'running' ? '进行中' : timing(activeLog.upstream_duration_ms) }}</span><span>首内容 {{ timing(activeLog.ttfc_ms) }}</span></div>
+                    <p v-if="activeLog.error" role="alert" class="break-words rounded border border-red-200 bg-red-50 p-3 text-xs text-red-900">{{ activeLog.error }}</p>
                   </div>
-                  <div class="panel-scroll wrap-content flex-1 p-4" aria-label="思考内容" tabindex="0">
-                    <div
-                      v-if="activeLog?.thinking_content"
-                      class="text-sm border-l-2 pl-3 py-1 border-primary/50 bg-primary/5 italic whitespace-pre-wrap break-words"
-                    >
-                      {{ activeLog.thinking_content }}
-                    </div>
-                    <div v-else-if="activeLog && activeLog.status === 'running'" class="text-sm text-muted-foreground italic pl-3 flex items-center space-x-2">
-                      <div class="animate-pulse flex space-x-1 items-center h-4 text-primary">
-                        <div class="w-1.5 h-1.5 bg-current rounded-full"></div>
-                        <div class="w-1.5 h-1.5 bg-current rounded-full"></div>
-                        <div class="w-1.5 h-1.5 bg-current rounded-full"></div>
-                      </div>
-                      <span>Waiting for thinking stream...</span>
-                    </div>
-                    <div v-else-if="activeLog" class="text-sm text-muted-foreground italic pl-3">
-                      No thinking content for this request.
-                    </div>
-                    <div v-else class="text-sm text-muted-foreground italic pl-3">
-                      Select a log to view its thinking stream.
-                    </div>
+                  <div v-if="activeLog.replay" ref="comparisonElement" class="min-w-0 outline-none" tabindex="-1" aria-label="来源与重放结果">
+                    <ResponseComparison :source-trace="activeLog.replay.of" :replay-trace="activeLog.trace_id" :status="activeLog.status" :source-log="comparisonSourceLog" :replay-log="activeLog" @select="trace => selectTrace(trace, 'details')" />
                   </div>
-                </ResizablePanel>
-
-                <ResizableHandle with-handle />
-
-                <!-- Tools & Actions / Details -->
-                <ResizablePanel :default-size="50" :min-size="15" class="flex min-h-0 min-w-0 flex-col">
-                  <div class="min-h-10 border-b flex flex-wrap items-center px-3 py-2 bg-muted/20 shrink-0">
-                    <Code2Icon class="h-4 w-4 mr-2 text-muted-foreground" />
-                    <h2 class="text-sm font-medium">Details</h2>
-                    <Badge v-if="activeLog" variant="secondary" class="ml-2 h-4 text-[10px] px-1">
-                      tools: {{ activeLog.tool_use_count ?? 0 }}
-                    </Badge>
-                  </div>
-                  <div class="panel-scroll wrap-content flex-1 p-4 bg-zinc-950 text-zinc-50" aria-label="请求与响应报文" tabindex="0">
-                    <div v-if="!activeLog" class="text-sm text-zinc-500 italic">
-                      No log selected.
-                    </div>
-                    <div v-else class="space-y-3 font-mono text-xs">
-                      <div class="rounded-md border border-zinc-800 bg-zinc-900/50 p-3">
-                        <div class="text-zinc-500 mb-1">Trace</div>
-                        <div class="text-emerald-400 break-all">{{ activeLog.trace_id }}</div>
-                      </div>
-                      <div class="rounded-md border border-zinc-800 bg-zinc-900/50 p-3">
-                        <div class="text-zinc-500 mb-1">Request</div>
-                        <pre class="text-blue-300 break-words whitespace-pre-wrap">{{ formatBody(activeLog.request_body) || '(empty)' }}</pre>
-                      </div>
-                      <div class="flex flex-wrap gap-3 text-[11px] text-zinc-300"><span>首字节 {{ timing(activeLog.ttfb_ms) }}</span><span>首内容 {{ timing(activeLog.ttfc_ms) }}</span></div>
-                      <ResponsePanel :trace-id="activeLog.trace_id" :status="activeLog.status" />
-                      <RoutingDetails :log="activeLog" />
-                      <div v-if="activeLog.error" class="rounded-md border border-red-800 bg-red-950/40 p-3">
-                        <div class="text-red-400 mb-1">Error</div>
-                        <pre class="text-red-300 break-words whitespace-pre-wrap">{{ activeLog.error }}</pre>
-                      </div>
-                    </div>
-                  </div>
-                </ResizablePanel>
-              </ResizablePanelGroup>
+                  <ResponsePanel v-else :trace-id="activeLog.trace_id" :status="activeLog.status" />
+                  <details v-if="activeLog.thinking_content" class="rounded-lg border bg-card">
+                    <summary class="cursor-pointer p-3 text-xs font-semibold"><BrainCircuitIcon class="mr-1 inline h-3.5 w-3.5 text-violet-600" />已返回的思考内容 <span class="font-normal text-muted-foreground">{{ formatTokens(activeLog.thinking_tokens, activeLog.token_sources?.thinking) }}</span><Badge v-if="activeLog.is_thinking_loop" variant="destructive" class="ml-2 text-[10px]">检测到重复思考</Badge></summary>
+                    <pre class="panel-scroll max-h-96 whitespace-pre-wrap break-words border-t p-3 text-xs leading-relaxed [overflow-wrap:anywhere]" tabindex="0" aria-label="思考内容">{{ activeLog.thinking_content }}</pre>
+                  </details>
+                  <ToolDetails :tools="activeLog.tools ?? []" @select="trace => selectTrace(trace, 'details')" />
+                  <RoutingDetails :log="activeLog" />
+                  <details class="rounded-lg border bg-card">
+                    <summary class="cursor-pointer p-3 text-xs font-semibold">请求报文 · 日志预览</summary>
+                    <div class="space-y-2 border-t p-3"><p class="text-[11px] text-muted-foreground">这是日志中的有界预览。完整正文、原始 / 出站差异和 cURL 在请求操作中查看。</p><Button size="sm" variant="outline" class="h-7 text-xs" @click="auditMode = 'compare'; openAuditForSelection()">查看完整请求</Button><pre class="panel-scroll max-h-96 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed [overflow-wrap:anywhere]" aria-label="请求正文预览" tabindex="0">{{ formatBody(activeLog.request_body) || '（无请求正文）' }}</pre></div>
+                  </details>
+                </template>
+              </section>
               <InterceptionPanel v-show="activeView === 'intercept'" :active="activeView === 'intercept'" :refresh-key="pendingRefreshKey" :connected="wsStatus === 'open'" @select="selectPendingRequest" />
-              <RequestAudit v-if="activeView === 'audit'" :trace-id="activeLogTraceId" :logs="allLogs" :refresh-key="graphRefreshKey" :replay-refresh-key="replayRefreshKey" @select="trace => selectTrace(trace, 'details')" />
-              <GatewaySettings v-if="activeView === 'manage'" @select="openHistoricalLog" />
+              <RequestAudit ref="requestAudit" v-show="activeView === 'audit'" v-model:mode="auditMode" :trace-id="auditSourceTraceId" :logs="allLogs" :refresh-key="graphRefreshKey" :replay-refresh-key="replayRefreshKey" :active="activeView === 'audit'" @select="trace => selectTrace(trace, 'details')" @source="returnToWorkbench" @operation="state => replayOperation = state" />
+              <GatewaySettings ref="gatewaySettings" v-show="activeView === 'manage'" :active="activeView === 'manage'" :selected-trace="activeLogTraceId" @select="openHistoricalLog" />
             </ResizablePanel>
 
             <ResizableHandle with-handle />
@@ -907,7 +994,7 @@ async function submitRule() {
           <SheetTitle class="text-sm">查看调用</SheetTitle>
           <SheetDescription class="text-xs">关联依据与模型返回的内容</SheetDescription>
         </SheetHeader>
-        <RequestInspector class="min-h-0 flex-1" :log="activeLog" @select="selectTrace" />
+        <RequestInspector class="min-h-0 flex-1" :log="activeLog" @select="selectTrace" @action="investigate" />
       </SheetContent>
     </Sheet>
   </div>

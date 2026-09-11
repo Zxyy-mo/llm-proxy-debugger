@@ -2,18 +2,64 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/privacy"
 )
+
+const conversationPrivacyPrefix = "conversation:v2:"
+
+type requestPreview struct {
+	body  []byte
+	limit int
+}
+
+// setInitialPreview requires the store lock and an allocated privacy scope.
+// Full-body projection precedes both summary extraction and body truncation.
+func (s *Store) setInitialPreview(rec *record, preview requestPreview) {
+	body := preview.body
+	if rec.privacy.Record {
+		body = s.Privacy.JSON(rec.privacy, rec.privacyScope, body)
+		rec.log.Summary = correlation.ExtractRequest(nil, rec.log.Path, body, "").Summary
+		if !utf8.Valid(preview.body) {
+			body = []byte("[非文本请求正文未展示：记录脱敏策略]")
+		}
+	}
+	limit := max(0, preview.limit)
+	if len(body) <= limit {
+		rec.log.RequestBody = string(body)
+		return
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(body[end]) {
+		end--
+	}
+	rec.log.RequestBody = string(body[:end]) + fmt.Sprintf("... [truncated, total %d bytes]", len(body))
+}
+
+// admissionPrivacyScope runs after initial correlation under the store lock.
+// Later graph movement never changes a capture's namespace or emitted tokens.
+func (s *Store) admissionPrivacyScope(rec *record) string {
+	if replay := rec.log.Replay; replay != nil {
+		if source := s.records[replay.Of]; source != nil && source.input.Scope == rec.input.Scope &&
+			strings.HasPrefix(source.privacyScope, conversationPrivacyPrefix) &&
+			(!rec.fixedSession || rec.log.SessionID == source.log.SessionID) {
+			return source.privacyScope
+		}
+	}
+	return conversationPrivacyPrefix + correlation.Hash(rec.input.Scope, rec.log.SessionID)
+}
 
 func (s *Store) PrivacyContext(trace string) (privacy.Policy, string) {
 	s.RLock()
 	defer s.RUnlock()
 	if rec := s.records[trace]; rec != nil {
-		return rec.privacy, rec.input.Scope
+		return rec.privacy, rec.privacyScope
 	}
 	return privacy.Policy{}, ""
 }
@@ -23,17 +69,17 @@ func (s *Store) displayLog(rec *record) RequestLog {
 	if !rec.privacy.Record {
 		return log
 	}
-	project := func(value string) string { return s.Privacy.Text(rec.privacy, rec.input.Scope, value) }
-	log.RequestBody = string(s.Privacy.JSON(rec.privacy, rec.input.Scope, []byte(log.RequestBody)))
-	log.ResponseBody = string(s.Privacy.JSON(rec.privacy, rec.input.Scope, []byte(log.ResponseBody)))
+	project := func(value string) string { return s.Privacy.Text(rec.privacy, rec.privacyScope, value) }
+	log.RequestBody = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(log.RequestBody)))
+	log.ResponseBody = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(log.ResponseBody)))
 	log.Summary, log.ThinkingContent, log.Error = project(log.Summary), project(log.ThinkingContent), project(log.Error)
 	for i := range log.Tools {
 		if log.Tools[i].Truncated {
 			log.Tools[i].Input, log.Tools[i].Output = "[工具报文已截断：记录脱敏策略]", ""
 			continue
 		}
-		log.Tools[i].Input = string(s.Privacy.JSON(rec.privacy, rec.input.Scope, []byte(log.Tools[i].Input)))
-		log.Tools[i].Output = string(s.Privacy.JSON(rec.privacy, rec.input.Scope, []byte(log.Tools[i].Output)))
+		log.Tools[i].Input = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(log.Tools[i].Input)))
+		log.Tools[i].Output = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(log.Tools[i].Output)))
 		log.Tools[i].Error = project(log.Tools[i].Error)
 	}
 	for key, value := range log.Headers {

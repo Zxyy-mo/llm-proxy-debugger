@@ -17,6 +17,10 @@ export interface ResponseSnapshot {
   body: string
   body_encoding?: 'base64'
   truncated?: boolean
+  offset: number
+  end: number
+  next_offset: number | null
+  last_offset: number
   redacted?: boolean
   representation?: string
   variant?: 'upstream' | 'client'
@@ -333,7 +337,7 @@ export interface ReplayRecord {
   source: ReplaySource
   modified: boolean
   state: 'running' | 'done' | 'error' | 'canceled'
-  reason?: 'manual' | 'timeout' | 'gateway_restarted'
+  reason?: 'manual' | 'timeout' | 'gateway_restarted' | 'shutdown'
   error?: string
   status_code?: number
   created_at: string

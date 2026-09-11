@@ -2,15 +2,16 @@
 
 面向个人开发者的 LLM 调试网关：捕获真实请求与响应，查看会话、上下文、工具与耗时，在 HTTP 请求发出前编辑，或从已捕获快照重放一次模型请求。
 
-当前产品基线是 **`refactor/modular-structure`**。M1–M8 的约定能力已实现；功能、支持边界和验收分别见 [清单](FEATURE_CHECKLIST.md)、[路线与决策](IMPLEMENTATION_ROADMAP.md)、[验证记录](output/playwright/foundation/verification.md)。
+当前产品基线是 **`refactor/modular-structure`**。已打通请求定位、上下文检查、修改重放和结果评估流程；入门见 [排障使用指南](docs/USAGE.md)，功能、支持边界和验收见 [清单](FEATURE_CHECKLIST.md)、[路线](IMPLEMENTATION_ROADMAP.md)、[最新验收](output/playwright/agent-debug-loop/verification.md)。
 
 ## 现在可以做什么
 
-- **完整报文**：原始/出站请求、JSON/SSE 响应按文件保存，支持完整下载、gzip 标记和有界预览；转换前后响应分开查看。
+- **请求定位**：关键词/状态筛选、耗时排序、可读的节点聚焦，以及上下文、重放和返回来源的直接入口。
+- **完整报文**：原始/出站请求、JSON/SSE 响应按文件保存，支持分段浏览、直达末段、完整下载和 gzip 标记；转换前后响应分开查看。
 - **可信指标**：每个 Token 计数标注 Provider usage、字符估算或未知；首响应头、首有效内容从实际出站计时，排除断点等待。
 - **会话与上下文**：显式会话标识、父 Trace、前序 Response ID、唯一完整历史前缀关联；支持分支、迟到父调用及相邻请求的消息/system/tools 对比。
 - **流量修改**：三种协议的 Prompt 注入、规则优先级、倒计时断点、正文与允许的请求头编辑、校验、放行和取消。
-- **重放**：安全 cURL 导出、单次模型请求重放、幂等键、超时/取消及来源响应对比；已有出站快照固定目的地并跳过重复注入与转换。
+- **重放**：草稿与执行状态独立，支持切换返回、超时/取消、丢响应恢复，以及来源/结果的状态、输出和指标评估；出站快照固定目的地，登记落盘后才执行。
 - **脱敏**：记录与出站策略独立，支持默认邮箱/手机号和自定义正则、稳定占位符、原文保留选择及受控还原。
 - **本地历史**：SQLite 元数据、报文文件、规则、路由、工具和重放状态恢复；关键词/模型/状态/会话查询及清理。
 - **工具视图**：独立工具节点、模型可见的参数与后续结果；通过 `POST /api/tool-spans` 接收 MCP/Agent/工具执行记录，真实上报耗时与未知耗时分开。
@@ -19,13 +20,11 @@
 
 ## 本地运行
 
-需要 Go 1.24+、Node.js 22.12+ 和 npm。在仓库根目录用 PowerShell 执行：
+需要 Go 1.24+、Node.js 22.18+ 和 npm。在仓库根目录执行：
 
-```powershell
-Set-Location web
-npm ci
-npm run build
-Set-Location ..
+```sh
+npm --prefix web ci
+npm --prefix web run build
 
 go run ./cmd/proxy -listen 127.0.0.1:12337 -target http://127.0.0.1:28000/v1 -logdir log
 ```
@@ -44,7 +43,7 @@ go run ./cmd/proxy -listen 127.0.0.1:12337 -target http://127.0.0.1:28000/v1 -lo
 | `-web` | `web/dist` | `/ui/` 静态资源目录；`-` 关闭 |
 | `-insecure` | `false` | 本地调试时允许不可信上游证书；默认验证 TLS |
 
-开发前端时可在 `web` 目录运行 `npm run dev`。Vite 默认代理管理 API 到 `http://localhost:12337`；自定义地址用 `$env:BACKEND_URL = 'http://127.0.0.1:12666'`。
+开发前端时可在 `web` 目录运行 `npm run dev`。Vite 默认代理管理 API 到 `http://localhost:12337`；自定义地址在启动 Vite 前设置 `BACKEND_URL` 环境变量。
 
 Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在启动网关的进程环境中设置该变量，再在表单填写变量名。原始请求中的鉴权头、Cookie 和密钥类查询参数不会成为可导出的凭证值。
 
@@ -69,7 +68,7 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 | `GET /api/interceptions`，`GET/PATCH /api/interceptions/{trace}` | 等待队列和编辑草稿 |
 | `POST /api/interceptions/{trace}/validate`、`/release`、`/cancel` | 校验、放行、取消；必须传最新 `revision` |
 | `GET /api/requests/{trace}`、`/body`、`/curl` | 完整原始/出站请求、正文下载、安全 cURL |
-| `GET /api/responses/{trace}`、`/download` | 完整响应；`variant=client\|upstream`，详情可用 `limit` 限制预览 |
+| `GET /api/responses/{trace}`、`/download` | 完整响应；`variant=client\|upstream`，详情支持 `offset`/`limit` 分段浏览 |
 | `GET /api/context-diff/{trace}?base=…` | 默认比较已捕获父调用，或手动选定基线 |
 | `POST /api/replays`、`/validate` | 单次重放及预校验 |
 | `GET /api/replays`、`GET /api/replays/{id}`、`POST /api/replays/{id}/cancel` | 重放记录和取消 |
@@ -84,7 +83,7 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 
 ## 使用边界与存储
 
-- 默认开启 SQLite 持久化，元数据约每 200 ms 合并写入，正常退出刷新；异常中止可能丢失尚未写入的最近元数据。恢复中的活动请求标记中断，网关不会自动补发；客户端自身仍可能重试。
+- 默认开启 SQLite 持久化，普通元数据约每 200 ms 合并写入，正常退出刷新；异常中止可能丢失最近普通状态。新重放先同步保存登记与幂等键，再执行；保存失败不会发送上游请求。恢复中的活动请求标记中断，不会自动补发。
 - SQLite 当前保存一份合并 JSON 元数据快照，历史筛选使用内存索引，正文另存文件。适用于个人调试；尚未实现按表增量存储和大规模分页数据库查询。
 - `-data -` 仅关闭元数据持久化，仍可生成报文文件。备份/迁移需要同时保留数据库和捕获目录；本版本记录绝对文件路径，迁移后应保持可解析的捕获路径。
 - JSON 响应处理及流式文本累积仍会使用内存。列表/广播采用有界预览；完整文件不是零内存转发保证。
@@ -96,13 +95,13 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 
 ## 验证
 
-```powershell
+```sh
 go test -race ./...
 go vet ./...
-Set-Location web
-npm run build
+npm --prefix web test
+npm --prefix web run build
 ```
 
-本轮包含 Go 回归与 race、生产构建、25 项浏览器功能断言、5 种视口可达性、13 项重启恢复检查、历史/文件清理，以及真实 `glm-5.3-flash` 中转的 JSON/SSE 检查。真实中转的 Responses、历史和 WebSocket 能力未据此宣称通过；这些能力有独立 mock 协议测试。
+本轮通过全量 Go race/vet、46 项前端辅助测试、生产构建，以及基于 70 次合成 Agent 调用的实际浏览器排障流程、丢响应恢复、取消、历史返回和七种视口检查。完整响应、会话隔离与持久化另有 [专项验收](output/playwright/foundation-refinement/verification.md)。
 
-证据、脚本及截图见 [foundation 验证记录](output/playwright/foundation/verification.md)。开发入口见 [HANDOFF.md](HANDOFF.md)。
+证据、脚本和截图见 [排障流程验收](output/playwright/agent-debug-loop/verification.md)。此前真实 `glm-5.3-flash` 的 JSON/SSE 结果保留在 [foundation 历史验收](output/playwright/foundation/verification.md)；本轮使用本地 mock，不据此扩展真实 Provider 的能力声明。开发入口见 [HANDOFF.md](HANDOFF.md)。

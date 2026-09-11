@@ -25,7 +25,9 @@ Defaults include email and mainland-China mobile-number patterns. Up to 32 uniqu
 
 Policy is captured when a request begins. Textual projection precedes preview truncation. JSON processing preserves number literals. Patterns inspect string values rather than JSON property names. This is configurable pattern matching, not automatic detection of every secret.
 
-Placeholders use a keyed hash of upstream/client-auth scope, pattern name and matched value. The same value stays consistent across current/history/tool strings and across session merges. **Scope is upstream plus client credential identity, not strictly one session ID**; same-identity conversations can share placeholder identities. Existing placeholders are protected from further regex rewriting. No raw authentication key is stored to produce these hashes.
+New captures use a keyed hash of their **admission-time conversation plus upstream/client credential identity**, pattern name and matched value. The same value stays consistent in already-associated calls within that conversation; unrelated conversations sharing credentials receive different placeholders. Scope allocation and full-body projection happen atomically after initial correlation and before preview truncation. Existing placeholders are protected from further regex rewriting. No raw authentication key is stored to produce these hashes.
+
+Each capture keeps its privacy namespace for its lifetime. Later graph merges, detaches or response identifiers do not rewrite already-forwarded bytes or grant another namespace's reveal authority. Previously unrelated captures that are linked later can therefore retain different historical placeholders. Same-identity replay may retain its source's modern namespace when no explicit different conversation takes precedence. Older version 1 captures keep their legacy namespace for restoration; fresh captures never inherit that credential-wide namespace. Snapshot version 2 persists the frozen namespace and still reads version 1 data.
 
 `POST /api/privacy/restore` accepts `{trace_id, body}`. It requires the trace's original-retention policy and the current reveal opt-in, and restores only available mappings in that trace's scope. Missing trace: 404; unretained originals: 409; reveal disabled: 403. The API returns text for operator inspection; it does not send another model request.
 
@@ -39,9 +41,9 @@ Policy updates apply to new captures; they do not retroactively erase previously
 
 Persisted metadata includes requests/sessions, correlation indices, rules, captured forwarding profiles without secrets, response representations, privacy policy/mappings, provider settings, replay records/keys and tool results/spans.
 
-Changes trigger an approximately 200 ms coalesced flush; normal shutdown flushes. Abrupt termination can lose recent metadata not yet flushed. Restoring a running/pending request produces `status:error`, HTTP 503 and an explicit restart interruption message, with unknown metrics. Pending interception reason becomes `gateway_restarted`. Saved running replays likewise become errors. Neither restore nor browsing automatically executes anything.
+Ordinary changes trigger an approximately 200 ms coalesced flush; normal shutdown flushes. Abrupt termination can lose recent ordinary metadata not yet flushed. New replay registrations are a synchronous boundary: the record, fingerprint and idempotency key must be committed before execution starts. A failed registration returns 503 and sends no upstream request. Restoring a running/pending request produces `status:error`, HTTP 503 and an explicit restart interruption message, with unknown metrics. Pending interception reason becomes `gateway_restarted`. Saved running replays likewise become errors. Neither restore nor browsing automatically executes anything.
 
-Already persisted replay idempotency keys continue to suppress duplicate actions. This does not guarantee cross-crash exactly-once execution within the pre-flush window. Client/network libraries may also retry their own requests.
+Persisted replay idempotency keys continue to suppress duplicate actions. The registration barrier prevents an accepted persistent replay from losing its key in the ordinary background-flush window. It does not guarantee exactly-once completion: a crash after registration but before dispatch can leave an interrupted action that was never sent, and a crash after sending can leave its final result unknown. Memory-only mode remains non-durable. Client/network libraries may also retry their own requests.
 
 The store restores in-memory indices from the saved snapshot; history queries currently filter those indices/records. It is not a normalized high-volume SQL schema. Copy both metadata and body files for backup. Paths must still resolve under the capture root after migration.
 
@@ -53,13 +55,17 @@ The store restores in-memory indices from the saved snapshot; history queries cu
 
 `POST /api/history/cleanup` accepts `{before?,session_id?,all?}`. At least a date/session filter or explicit `all:true` is required. `before` is RFC3339. Response: `{deleted,active_skipped}`. Running/pending requests are skipped.
 
-Deleting a parent retains the surviving child's reference and sets `correlation.warning:deleted_parent`. Indices/empty sessions are pruned. Cleanup forgets reveal mappings for affected credential scopes, including mappings shared by surviving records in that scope. It flushes metadata before deleting owned files and checkpoints WAL. It does not delete arbitrary external paths or promise forensic erasure of filesystem backups/log rotation.
+Deleting a parent retains the surviving child's reference and sets `correlation.warning:deleted_parent`. Indices/empty sessions are pruned. Cleanup forgets a privacy namespace only when no surviving record references it. This protects same-session survivors, active records, moved captures and legacy data; deleting one conversation cannot erase another conversation's restoration data. Mappings have namespace-level lifetime, so deleting one trace does not erase individual mappings still owned by a surviving namespace. Cleanup flushes metadata before deleting owned files and checkpoints WAL. It does not delete arbitrary external paths or promise forensic erasure of filesystem backups/log rotation.
 
 Replay provenance/idempotency records remain separate; deleting a model record does not cause a replay to execute again. Existing rotated structured logs are separate from indexed history cleanup.
 
 ## Structured tool observations
 
 Model response observation records tool ID/call ID, name/kind, arguments, source, status, result trace and any supplied output/error. Partial arguments and truncated payloads are labelled. Tool outputs in later model requests attach only with matching scope/session and a unique owner, preferring explicit parent evidence. An API-observed call/result has unknown execution duration.
+
+If late association copies a tool output from a different frozen privacy namespace, its owner retains only the known placeholder aliases literally referenced by that output, and only when both captures retain originals. The output bytes and result-trace provenance stay unchanged. Unrelated/unknown mappings are not imported; either no-retain policy prevents raw aliases. Deleting the result trace then cannot destroy the surviving owner's permitted restoration data.
+
+Identity-alias cleanup selects a successor only when that record independently carries the same explicit identity evidence. Deleting the last actual identity owner removes the alias rather than transferring it to a movable inferred child. Outbound substitutions preserve original identity/reference evidence while updating outgoing transcript hashes. A second bounded hash-only pre-substitution anchor lets successfully completed calls match a client's original resubmitted history; edited, failed, canceled or remote-state-only input does not invent an anchor.
 
 `POST /api/tool-spans` accepts an application-reported execution:
 

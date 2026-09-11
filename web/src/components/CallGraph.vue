@@ -20,6 +20,7 @@ import '@vue-flow/minimap/dist/style.css'
 const props = defineProps<{
   sessionId: string | null
   refreshKey: number
+  focusKey: number
   activeTraceId: string | null
   logs: LiveLog[]
 }>()
@@ -222,6 +223,11 @@ watch(() => props.sessionId, () => {
 }, { immediate: true })
 
 watch(() => props.refreshKey, scheduleRefresh)
+watch(() => props.focusKey, key => {
+  // This token changes only for an explicit request-list selection. Live
+  // refreshes do not change camera mode or undo a later manual pan/zoom.
+  if (key) focusSelected()
+}, { immediate: true })
 watch([liveLogs, () => props.activeTraceId], () => {
   nodes.value = nodes.value.map((node) => ({
     ...node, data: node.data ? liveNode(node.data) : undefined, selected: node.data?.trace_id === props.activeTraceId,

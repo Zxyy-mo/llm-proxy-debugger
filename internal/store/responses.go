@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -30,6 +31,10 @@ type ResponseSnapshot struct {
 	Body               string `json:"body"`
 	BodyEncoding       string `json:"body_encoding,omitempty"`
 	Truncated          bool   `json:"truncated,omitempty"`
+	Offset             int64  `json:"offset"`
+	End                int64  `json:"end"`
+	NextOffset         *int64 `json:"next_offset"`
+	LastOffset         int64  `json:"last_offset"`
 	Redacted           bool   `json:"redacted,omitempty"`
 	Representation     string `json:"representation,omitempty"`
 	Path               string `json:"-"`
@@ -97,8 +102,9 @@ func (s *Store) ResponsesHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "response not found")
 		return
 	}
+	query, queryErr := url.ParseQuery(r.URL.RawQuery)
 	response, ok := s.ResponseSnapshot(parts[0])
-	if variant := r.URL.Query().Get("variant"); variant == "upstream" {
+	if variant := query.Get("variant"); variant == "upstream" {
 		response, ok = s.UpstreamResponseSnapshot(parts[0])
 	} else if variant != "" && variant != "client" {
 		writeError(w, http.StatusBadRequest, "variant must be client or upstream")
@@ -107,6 +113,34 @@ func (s *Store) ResponsesHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeError(w, http.StatusNotFound, "request not found")
 		return
+	}
+	// An offset opts into bounded browsing. With neither parameter, preserve
+	// the existing full-body detail API. Downloads do not use these parameters.
+	offset, limit := int64(0), int64(0)
+	if len(parts) == 1 {
+		// URL.Query silently drops malformed values. Treat that as a client
+		// error instead of accidentally falling back to an unlimited read.
+		if queryErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid response query parameters")
+			return
+		}
+		if values, present := query["offset"]; present {
+			var ok bool
+			offset, ok = responseByteParameter(values)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "offset must be a nonnegative integer byte offset")
+				return
+			}
+			limit = 256 << 10
+		}
+		if values, present := query["limit"]; present {
+			var ok bool
+			limit, ok = responseByteParameter(values)
+			if !ok || limit < 1 || limit > 16<<20 {
+				writeError(w, http.StatusBadRequest, "limit must be 1–16777216 bytes")
+				return
+			}
+		}
 	}
 	var file *os.File
 	if response.Stored == "file" {
@@ -153,34 +187,42 @@ func (s *Store) ResponsesHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(w, file)
 		return
 	}
-	limit := int64(0)
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		var err error
-		limit, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || limit < 1 || limit > 16<<20 {
-			writeError(w, http.StatusBadRequest, "limit must be 1–16777216 bytes")
+	response.Body, response.BodyEncoding = "", ""
+	response.Offset, response.End, response.LastOffset = 0, 0, 0
+	response.Truncated, response.NextOffset = false, nil
+	if response.Stored == "file" {
+		if offset > response.Bytes {
+			writeError(w, http.StatusRequestedRangeNotSatisfiable, "offset exceeds stored response size")
 			return
 		}
-	}
-	if response.Stored == "file" {
-		var reader io.Reader = file
-		if limit > 0 {
-			reader = io.LimitReader(file, limit+1)
+		response.Offset, response.End = offset, offset
+		// Capture the currently available size, including while receiving. A
+		// growing file must not turn a bounded read into an unbounded one.
+		readBytes := response.Bytes - offset
+		if limit > 0 && readBytes > limit+utf8.UTFMax-1 {
+			readBytes = limit + utf8.UTFMax - 1
 		}
-		body, err := io.ReadAll(reader)
+		body, err := io.ReadAll(io.NewSectionReader(file, offset, readBytes))
 		if err != nil {
 			response.Stored, response.Reason = "missing", "响应读取失败"
 		} else {
-			if limit > 0 && int64(len(body)) > limit {
-				body, response.Truncated = body[:limit], true
+			if int64(len(body)) < readBytes {
+				// Files normally only grow until completion, but an externally
+				// shortened file must not produce a non-advancing cursor.
+				response.Bytes = offset + int64(len(body))
 			}
-			// Do not turn a split multibyte character at a preview boundary into U+FFFD.
+			text := responseText(response)
+			if limit > 0 {
+				body = body[:responsePartLength(body, limit, text)]
+			}
+			response.End = offset + int64(len(body))
+			response.Truncated = response.End < response.Bytes
 			if response.Truncated {
-				for i := 0; i < 3 && len(body) > 0 && !utf8.Valid(body); i++ {
-					body = body[:len(body)-1]
-				}
+				next := response.End
+				response.NextOffset = &next
 			}
-			if utf8.Valid(body) && (response.ContentEncoding == "" || response.Decoded || response.ContentEncoding == "identity") {
+			response.LastOffset = responseLastOffset(file, response.Bytes, limit, text)
+			if text && utf8.Valid(body) {
 				response.Body = string(body)
 			} else {
 				response.Body, response.BodyEncoding = base64.StdEncoding.EncodeToString(body), "base64"
@@ -188,4 +230,77 @@ func (s *Store) ResponsesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+func responseByteParameter(values []string) (int64, bool) {
+	if len(values) != 1 || values[0] == "" {
+		return 0, false
+	}
+	for _, c := range values[0] {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	value, err := strconv.ParseInt(values[0], 10, 64)
+	return value, err == nil
+}
+
+func responseText(response ResponseSnapshot) bool {
+	if response.ContentEncoding != "" && response.ContentEncoding != "identity" && !response.Decoded {
+		return false
+	}
+	return response.Type != "binary" || strings.HasPrefix(strings.ToLower(response.ContentType), "text/")
+}
+
+// responsePartLength preserves exact bytes at arbitrary offsets. Only a valid
+// final codepoint split by the limit may move to the next part; invalid bytes
+// are never trimmed. A limit too small for the first codepoint may expand by
+// at most UTFMax-1 bytes so even limit=1 makes progress through UTF-8 text.
+func responsePartLength(body []byte, limit int64, text bool) int {
+	if int64(len(body)) <= limit {
+		return len(body)
+	}
+	n := int(limit)
+	if !text || utf8.Valid(body[:n]) {
+		return n
+	}
+	start := n - 1
+	for start > 0 && n-start < utf8.UTFMax && !utf8.RuneStart(body[start]) {
+		start--
+	}
+	_, size := utf8.DecodeRune(body[start:])
+	if size <= 1 || start+size <= n || !utf8.Valid(body[:start]) {
+		return n
+	}
+	if start == 0 {
+		return size
+	}
+	return start
+}
+
+// The final-part shortcut is separate from exact requested offsets. For text,
+// it starts after a codepoint straddling the nominal boundary, keeping the
+// final part within the limit (or one complete codepoint for tiny limits).
+func responseLastOffset(file *os.File, total, limit int64, text bool) int64 {
+	if limit == 0 || total <= limit {
+		return 0
+	}
+	offset := total - limit
+	if !text {
+		return offset
+	}
+	start := max(int64(0), offset-(utf8.UTFMax-1))
+	var boundary [2*utf8.UTFMax - 1]byte
+	n, _ := file.ReadAt(boundary[:min(int64(len(boundary)), total-start)], start)
+	for i := 0; i < n && start+int64(i) < offset; i++ {
+		_, size := utf8.DecodeRune(boundary[i:n])
+		end := start + int64(i+size)
+		if size > 1 && end > offset {
+			if end == total {
+				return start + int64(i)
+			}
+			return end
+		}
+	}
+	return offset
 }

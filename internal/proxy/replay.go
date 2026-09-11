@@ -429,6 +429,9 @@ func (s *Server) createReplay(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		status := http.StatusConflict
+		if errors.Is(err, replay.ErrPersistence) || errors.Is(err, replay.ErrClosed) {
+			status = http.StatusServiceUnavailable
+		}
 		replayJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
@@ -438,6 +441,7 @@ func (s *Server) createReplay(w http.ResponseWriter, r *http.Request) {
 		// Let the new trace exist before answering so the UI can select it.
 		select {
 		case <-opts.started:
+		case <-s.lifecycle.Done():
 		case <-time.After(3 * time.Second):
 		}
 		record, _ = s.replays.Get(record.ID)

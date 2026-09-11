@@ -68,7 +68,7 @@ func (s *Store) ObserveToolResults(trace string, body []byte) {
 	}
 	if rec.privacy.Record && !rec.privacy.RetainRaw {
 		for i := range results {
-			results[i].Output = string(s.Privacy.JSON(rec.privacy, rec.input.Scope, []byte(results[i].Output)))
+			results[i].Output = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(results[i].Output)))
 		}
 	}
 	rec.toolResults = results
@@ -112,6 +112,12 @@ func (s *Store) attachResults(rec *record) {
 			continue
 		}
 		call.Output = result.Output
+		if rec.privacy.RetainRaw && owner.privacy.RetainRaw {
+			// Late correlation can join captures with different frozen privacy
+			// namespaces. Retain only aliases used by this copied output so its
+			// owner can still restore it after the result trace is cleaned up.
+			s.Privacy.RetainAliases(rec.privacyScope, owner.privacyScope, call.Output)
+		}
 		call.ResultTrace = rec.log.TraceID
 		call.Status = "result_observed"
 		if result.Error {

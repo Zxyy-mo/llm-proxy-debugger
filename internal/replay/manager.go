@@ -6,6 +6,7 @@ package replay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -14,8 +15,10 @@ import (
 var (
 	ErrNotFound = errors.New("replay not found")
 	// ErrKeyReused means the idempotency key was already used for different content.
-	ErrKeyReused = errors.New("idempotency key was already used for a different replay")
-	ErrFinished  = errors.New("replay already finished")
+	ErrKeyReused   = errors.New("idempotency key was already used for a different replay")
+	ErrFinished    = errors.New("replay already finished")
+	ErrClosed      = errors.New("replay service is shutting down; no new execution was started")
+	ErrPersistence = errors.New("replay registration could not be saved; no upstream request was sent")
 )
 
 type Record struct {
@@ -25,7 +28,7 @@ type Record struct {
 	Source         string `json:"source"`
 	Modified       bool   `json:"modified"`
 	State          string `json:"state"`            // running, done, error or canceled
-	Reason         string `json:"reason,omitempty"` // manual or timeout for canceled/error replays
+	Reason         string `json:"reason,omitempty"` // manual, timeout, shutdown or gateway_restarted
 	Error          string `json:"error,omitempty"`
 	StatusCode     int    `json:"status_code,omitempty"`
 	CreatedAt      string `json:"created_at"`
@@ -50,14 +53,27 @@ type entry struct {
 }
 
 type Manager struct {
-	mu      sync.Mutex
-	entries map[string]*entry
-	keys    map[string]string
-	changed func()
+	mu        sync.Mutex
+	entries   map[string]*entry
+	keys      map[string]string
+	changed   func()
+	persist   Persist
+	lifecycle context.Context
+	stop      context.CancelFunc
 }
 
+// Persist receives an immutable snapshot in manager mutation order. A durable
+// save must commit before returning success. It runs under the manager lock
+// and must not call back into the manager. Non-durable changes may be coalesced.
+type Persist func(saved []Saved, durable bool) error
+
 func New(changed func()) *Manager {
-	return &Manager{entries: make(map[string]*entry), keys: make(map[string]string), changed: changed}
+	return NewWithPersistence(changed, nil)
+}
+
+func NewWithPersistence(changed func(), persist Persist) *Manager {
+	lifecycle, stop := context.WithCancel(context.Background())
+	return &Manager{entries: make(map[string]*entry), keys: make(map[string]string), changed: changed, persist: persist, lifecycle: lifecycle, stop: stop}
 }
 
 func (m *Manager) notify() {
@@ -68,7 +84,8 @@ func (m *Manager) notify() {
 
 // Start registers a replay and runs it on a server-owned context that outlives
 // the creating HTTP request. It returns the existing record, with created=false,
-// when the key was already used for identical content.
+// when the key was already used for identical content. New registrations must
+// be durably saved before execution; a failed save leaves the key retryable.
 func (m *Manager) Start(key, fingerprint string, record Record, timeout time.Duration, run func(context.Context) Outcome) (Record, bool, error) {
 	m.mu.Lock()
 	if id, exists := m.keys[key]; exists {
@@ -80,36 +97,84 @@ func (m *Manager) Start(key, fingerprint string, record Record, timeout time.Dur
 		}
 		return current, false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if m.lifecycle.Err() != nil {
+		m.mu.Unlock()
+		return Record{}, false, ErrClosed
+	}
 	record.State = "running"
 	record.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	record.TimeoutSeconds = int(timeout / time.Second)
 	record.IdempotencyKey = key
-	e := &entry{record: record, fingerprint: fingerprint, cancel: cancel, done: make(chan struct{})}
+	e := &entry{record: record, fingerprint: fingerprint, done: make(chan struct{})}
 	m.entries[record.ID] = e
 	m.keys[key] = record.ID
-	m.mu.Unlock()
-	m.notify()
-	go func() {
-		defer cancel()
-		outcome := run(ctx)
-		m.mu.Lock()
-		e.record.State, e.record.Error, e.record.StatusCode = outcome.State, outcome.Error, outcome.StatusCode
-		if e.record.State == "" {
-			e.record.State = "error"
-		}
-		switch {
-		case e.canceled:
-			e.record.Reason = "manual"
-		case errors.Is(ctx.Err(), context.DeadlineExceeded):
-			e.record.Reason = "timeout"
-		}
-		e.record.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		close(e.done)
+	if err := m.saveLocked(true); err != nil {
+		delete(m.entries, record.ID)
+		delete(m.keys, key)
+		m.mu.Unlock()
+		return Record{}, false, fmt.Errorf("%w: %v", ErrPersistence, err)
+	}
+	// The execution timeout excludes registration I/O. Shutdown cancels the
+	// parent immediately, including while a registration is waiting on storage.
+	ctx, cancel := context.WithTimeout(m.lifecycle, timeout)
+	e.cancel = cancel
+	if m.lifecycle.Err() != nil {
+		m.finishLocked(e, ctx, Outcome{State: "canceled", Error: ErrClosed.Error(), StatusCode: 499})
+		record = e.record
+		cancel()
 		m.mu.Unlock()
 		m.notify()
-	}()
+		return record, false, ErrClosed
+	}
+	go m.execute(ctx, cancel, e, run)
+	m.mu.Unlock()
+	m.notify()
 	return record, true, nil
+}
+
+func (m *Manager) execute(ctx context.Context, cancel context.CancelFunc, e *entry, run func(context.Context) Outcome) {
+	defer cancel()
+	var outcome Outcome
+	if err := ctx.Err(); err != nil {
+		outcome = Outcome{State: "canceled", Error: err.Error(), StatusCode: 499}
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome.State, outcome.StatusCode = "error", 504
+		}
+	} else {
+		outcome = run(ctx)
+	}
+	m.mu.Lock()
+	m.finishLocked(e, ctx, outcome)
+	m.mu.Unlock()
+	m.notify()
+}
+
+func (m *Manager) finishLocked(e *entry, ctx context.Context, outcome Outcome) {
+	e.record.State, e.record.Error, e.record.StatusCode = outcome.State, outcome.Error, outcome.StatusCode
+	if e.record.State == "" {
+		e.record.State = "error"
+	}
+	switch {
+	case e.canceled:
+		e.record.Reason = "manual"
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		e.record.Reason = "timeout"
+	case m.lifecycle.Err() != nil && e.record.State == "canceled":
+		e.record.Reason = "shutdown"
+		e.record.Error = "网关关闭，重放已中断；不会自动补发"
+	}
+	e.record.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	// A completion save cannot roll back the upstream side effect. The durable
+	// registration still suppresses retries if this coalesced update is lost.
+	_ = m.saveLocked(false)
+	close(e.done)
+}
+
+func (m *Manager) saveLocked(durable bool) error {
+	if m.persist == nil {
+		return nil
+	}
+	return m.persist(m.snapshotLocked(), durable)
 }
 
 type Saved struct {
@@ -120,6 +185,10 @@ type Saved struct {
 func (m *Manager) Snapshot() []Saved {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.snapshotLocked()
+}
+
+func (m *Manager) snapshotLocked() []Saved {
 	saved := make([]Saved, 0, len(m.entries))
 	for _, e := range m.entries {
 		saved = append(saved, Saved{e.record, e.fingerprint})
@@ -144,9 +213,13 @@ func (m *Manager) Restore(saved []Saved) {
 		m.entries[record.ID] = &entry{record: record, fingerprint: item.Fingerprint, done: done}
 		m.keys[record.IdempotencyKey] = record.ID
 	}
+	_ = m.saveLocked(false)
 }
 
 func (m *Manager) Shutdown() {
+	// Cancel without waiting on mu: a registration can be in synchronous
+	// storage I/O, and must not dispatch once that save eventually returns.
+	m.stop()
 	m.mu.Lock()
 	var cancels []context.CancelFunc
 	var done []chan struct{}

@@ -34,7 +34,7 @@ onMounted(() => { void load() })
 <template>
   <section class="min-w-0 space-y-4" aria-label="脱敏策略">
     <h2 class="text-sm font-semibold">脱敏与原文保留</h2>
-    <p class="text-xs leading-relaxed text-muted-foreground">记录脱敏控制页面和导出内容；出站脱敏会修改发送给上游的 JSON 字符串。同一鉴权范围内的相同值使用稳定占位符，历史消息和工具结果保持一致。</p>
+    <p class="text-xs leading-relaxed text-muted-foreground">记录脱敏控制页面和导出内容；出站脱敏会修改发送给上游的 JSON 字符串。新请求按会话、上游和鉴权身份隔离占位符，已关联会话中的历史消息和工具结果保持一致。后续会话合并保留已有占位符。</p>
     <p v-if="error" role="alert" class="text-xs text-destructive">{{ error }}</p><p v-if="notice" role="status" class="text-xs text-teal-800">{{ notice }}</p>
     <form v-if="policy" class="space-y-4" @submit.prevent="save">
       <div class="space-y-3 rounded-lg border p-4 text-xs">
@@ -47,6 +47,6 @@ onMounted(() => { void load() })
       <div class="space-y-2"><label for="privacy-patterns" class="text-xs font-semibold">匹配模式（JSON，Go 正则表达式）</label><Textarea id="privacy-patterns" v-model="patterns" rows="10" spellcheck="false" class="font-mono text-xs" /><p class="text-[11px] text-muted-foreground">默认包含邮箱和中国大陆手机号，可添加带名称的自定义表达式。</p></div>
       <Button type="submit" :disabled="busy">保存策略</Button>
     </form>
-    <details v-if="policy?.allow_reveal" class="rounded-lg border"><summary class="cursor-pointer p-3 text-xs font-semibold">受控还原</summary><div class="space-y-3 border-t p-3"><p class="text-xs text-muted-foreground">使用该请求所属鉴权范围内保留的映射，只还原输入的占位符。结果不会自动发送给上游。</p><Input v-model="trace" aria-label="还原用的 Trace ID" placeholder="Trace ID" /><Textarea v-model="source" aria-label="待还原内容" placeholder="粘贴包含 [PRIVATE_…] 占位符的内容" rows="5" class="font-mono text-xs" /><Button :disabled="busy || !trace.trim() || !source" @click="restore">还原内容</Button><Textarea v-if="restored" :model-value="restored" readonly aria-label="还原结果" rows="5" class="font-mono text-xs" /></div></details>
+    <details v-if="policy?.allow_reveal" class="rounded-lg border"><summary class="cursor-pointer p-3 text-xs font-semibold">受控还原</summary><div class="space-y-3 border-t p-3"><p class="text-xs text-muted-foreground">使用该请求采集时保留的映射，只还原输入的占位符。同一范围仍有记录时，清理其他记录会保留所需映射。旧版记录保持原有还原范围；结果不会自动发送给上游。</p><Input v-model="trace" aria-label="还原用的 Trace ID" placeholder="Trace ID" /><Textarea v-model="source" aria-label="待还原内容" placeholder="粘贴包含 [PRIVATE_…] 占位符的内容" rows="5" class="font-mono text-xs" /><Button :disabled="busy || !trace.trim() || !source" @click="restore">还原内容</Button><Textarea v-if="restored" :model-value="restored" readonly aria-label="还原结果" rows="5" class="font-mono text-xs" /></div></details>
   </section>
 </template>

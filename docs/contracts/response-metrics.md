@@ -20,10 +20,17 @@ The recorder saves complete response bodies independently of `-maxbody`. Request
 | `reason` | Missing, failed or incomplete capture explanation |
 | `body` / `body_encoding` | Detail content; `base64` for non-text/encoded bytes |
 | `truncated` | Only the returned preview was limited |
+| `offset` / `end` | Inclusive start and exclusive end byte offsets of the returned part |
+| `next_offset` | Exact continuation offset, or `null` at the observed end |
+| `last_offset` | Bounded final-part start for the selected limit |
 | `redacted` / `representation` | Projection, conversion or frame-envelope representation |
 | `observation_warning` | Forwarding may be complete while parsed observation is incomplete |
 
-Without `limit` the detail API reads the entire saved body. `limit=1…16777216` returns a bounded preview; the UI requests 2 MiB. Preview boundaries do not introduce replacement characters into UTF-8. Downloads are unavailable while receiving (409) or missing (404).
+Without `offset` or `limit` the detail API retains its complete-body behavior. `offset` selects an exact nonnegative byte offset; `limit=1…16777216` bounds the part. Supplying only `offset` defaults to 256 KiB. Invalid, repeated or overflowing pagination parameters return 400; an offset beyond the observed file end returns 416, while an offset exactly at EOF returns an empty part. Downloads are unavailable while receiving (409) or missing (404).
+
+Text parts end at a complete UTF-8 code point. A limit smaller than one code point may exceed the requested limit by at most three bytes to make progress. Follow `next_offset`, not the requested limit, to reconstruct text without gaps. Invalid/binary/encoded data, including an arbitrary offset inside a code point, is returned as lossless Base64 instead of trimming bytes or inserting replacement characters. `last_offset` uses a bounded local read to align text near EOF.
+
+The UI reads and renders one 256 KiB part at a time, with previous/next, return-to-start and final-part controls and a visible byte range. Refresh keeps the selected part. Source and replay panels navigate independently. Partial JSON is displayed as original text; complete JSON formatting preserves number literals and has a bounded expansion budget. Exact full downloads are unchanged.
 
 Native JSON and SSE downloads preserve the saved complete bytes. Gzip JSON is saved decoded and labelled. Other encodings/binary data use Base64 in the API and raw bytes in downloads. A storage error reports a missing capture without breaking client forwarding.
 

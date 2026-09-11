@@ -4,6 +4,7 @@ The versioned contracts below describe the current `refactor/modular-structure` 
 
 ## Implemented contracts
 
+- [Operator investigation, replay recovery and result evaluation](contracts/operator-workflow.md)
 - [Conversation correlation and graph](contracts/conversation-graph.md)
 - [HTTP interception and full request captures](contracts/request-interception.md)
 - [Safe cURL export and single-model-request replay](contracts/request-replay.md)
@@ -15,6 +16,9 @@ The versioned contracts below describe the current `refactor/modular-structure` 
 
 ## Delivery and evidence
 
+- [Practical debugging guide](USAGE.md)
+- [Foundation refinement verification](../output/playwright/foundation-refinement/verification.md)
+- [End-to-end operator workflow verification](../output/playwright/agent-debug-loop/verification.md)
 - [Foundation decisions, M2–M8](plans/foundation.md)
 - [M2 delivered acceptance record](plans/m2-response-metrics/prd.md)
 - [Foundation verification, scripts and screenshots](../output/playwright/foundation/verification.md)

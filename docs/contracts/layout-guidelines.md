@@ -13,10 +13,15 @@
 - Payload panels stack on phones and tall tablets, and sit side by side in short landscape windows. The current-request selector remains available where the sidebar cannot provide navigation.
 - The audit view hosts the cURL panel and the replay workbench behind a mode switch with an explicit source selector. Replay drafts and credential fields live in component memory only (never storage) and reset only when the trace or source changes. The run button stays disabled until every replayable credential is entered; a running replay shows its state, a cancel control and a link to the new call. Copy, run, validate and credential controls must stay reachable at the seven layout viewports, and the body editor keeps a usable height.
 - JSON shown in editors is re-indented without parsing numbers (`formatBody`), so integers beyond 2^53 and escape sequences survive an edited replay or release.
+- Shared formatting falls back to exact raw text above its input, depth or expansion bounds. Request differences preserve numeric literals and explicitly label incomplete comparisons; a bounded diff alone does not protect an earlier unbounded formatting step.
+- The audit source is separate from the inspected trace. Same-source navigation keeps one workbench mounted; running/unknown execution and cancellation survive draft reset. History retains its applied filters/cursor. See [operator workflow](operator-workflow.md).
+- Response/result content has priority in details; an absent thinking stream does not reserve half the workspace. Complete response parts and source/result evaluation controls remain reachable on narrow and short screens.
 
 ## Graph contract
 
 `CallGraph.vue` observes the actual canvas container with `useResizeObserver`, not just browser width. Fit mode reframes after topology and panel-size changes, including inspector toggles and splitter drags. Metric-only refreshes do not rearrange the graph. Manual navigation and selected-node focus are explicit modes; the visible Show All control returns to automatic fitting.
+
+Desktop request-row and mobile request selection issue an explicit focus intent. This focuses a readable selected node while keeping the complete graph. Live metadata does not issue that intent or undo subsequent manual camera movement.
 
 ## Regression verification
 

@@ -1,4 +1,4 @@
-import type { CallGraph, CurlExport, Interception, InterceptionEdit, InterceptionSummary, ReplayRecord, ReplayRequest, ReplaySource, ReplayValidation, RequestCapture, ResponseSnapshot, Rule, Session, WSEvent } from './types'
+import type { CallGraph, CurlExport, Interception, InterceptionEdit, InterceptionSummary, ReplayRecord, ReplayRequest, ReplaySource, ReplayValidation, RequestCapture, RequestLog, ResponseSnapshot, Rule, Session, WSEvent } from './types'
 import type { ContextDifference } from './types'
 
 export class APIError extends Error {
@@ -6,6 +6,16 @@ export class APIError extends Error {
   constructor(message: string, status: number) {
     super(message)
     this.status = status
+  }
+}
+
+// Once a creation response has been lost, a later HTTP rejection cannot
+// disprove that earlier acceptance (for example, after source deletion or a
+// restart). Keep that ambiguity distinct from a first-attempt API rejection.
+export class ReplayCreationUncertainError extends Error {
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error))
+    this.name = 'ReplayCreationUncertainError'
   }
 }
 
@@ -69,8 +79,13 @@ export function fetchRequestCapture(trace: string, signal?: AbortSignal): Promis
   return requestJSON(`/api/requests/${encodeURIComponent(trace)}`, 'GET', undefined, signal)
 }
 
-export function fetchResponse(trace: string, signal?: AbortSignal, variant = 'client'): Promise<ResponseSnapshot> {
-  return requestJSON(`/api/responses/${encodeURIComponent(trace)}?limit=2097152&variant=${variant}`, 'GET', undefined, signal)
+export function fetchRequestLog(trace: string, signal?: AbortSignal): Promise<RequestLog> {
+  return requestJSON(`/api/history/${encodeURIComponent(trace)}`, 'GET', undefined, signal)
+}
+
+export function fetchResponse(trace: string, signal?: AbortSignal, variant = 'client', offset = 0, limit = 256 * 1024): Promise<ResponseSnapshot> {
+  const query = new URLSearchParams({ variant, offset: String(offset), limit: String(limit) })
+  return requestJSON(`/api/responses/${encodeURIComponent(trace)}?${query}`, 'GET', undefined, signal)
 }
 
 export function responseDownloadUrl(trace: string, variant = 'client'): string {
@@ -100,7 +115,11 @@ export async function createReplay(request: ReplayRequest): Promise<ReplayRecord
     return await requestJSON('/api/replays', 'POST', request)
   } catch (e) {
     if (e instanceof APIError) throw e
-    return requestJSON('/api/replays', 'POST', request)
+    try {
+      return await requestJSON('/api/replays', 'POST', request)
+    } catch (retryError) {
+      throw new ReplayCreationUncertainError(retryError)
+    }
   }
 }
 

@@ -99,6 +99,8 @@ type record struct {
 	response         *ResponseSnapshot
 	upstreamResponse *ResponseSnapshot
 	privacy          privacy.Policy
+	privacyScope     string               // immutable namespace selected after admission correlation
+	privacyHistory   *correlation.Request // hash-only pre-substitution transcript until completion
 }
 
 // Rule 动态干预规则

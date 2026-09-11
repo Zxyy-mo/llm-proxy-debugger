@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { MousePointer2Icon, GitBranchIcon, BrainCircuitIcon, AlertCircleIcon, RepeatIcon } from 'lucide-vue-next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,9 +10,13 @@ import ResponsePanel from './ResponsePanel.vue'
 import ResponseComparison from './ResponseComparison.vue'
 import ToolDetails from './ToolDetails.vue'
 import RoutingDetails from './RoutingDetails.vue'
+import RequestActions from './RequestActions.vue'
+import type { InvestigationAction } from '@/lib/investigation'
 
 const props = defineProps<{ log: LiveLog | null }>()
-const emit = defineEmits<{ select: [trace: string] }>()
+const emit = defineEmits<{ select: [trace: string]; action: [intent: InvestigationAction] }>()
+const comparisonOpen = ref(false)
+watch(() => props.log?.trace_id, () => { comparisonOpen.value = false })
 const identifiers = computed(() => {
   const log = props.log
   if (!log) return []
@@ -48,6 +52,12 @@ const identifiers = computed(() => {
         </div>
         <p class="break-words text-muted-foreground leading-relaxed">{{ log.summary || `${log.method} ${log.path}` }}</p>
         <p class="mt-2 break-all font-mono text-[10px] text-muted-foreground">{{ log.method }} {{ log.path }} · {{ log.type }}</p>
+      </div>
+
+      <RequestActions :log="log" @action="intent => emit('action', intent)" />
+      <div v-if="log.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
+        <div class="mb-1 font-semibold">请求错误</div>
+        <p class="break-words leading-relaxed">{{ log.error }}</p>
       </div>
 
       <div class="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border">
@@ -97,11 +107,6 @@ const identifiers = computed(() => {
         </dl>
       </section>
 
-      <div v-if="log.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
-        <div class="mb-1 font-semibold">请求错误</div>
-        <p class="break-words leading-relaxed">{{ log.error }}</p>
-      </div>
-
       <details v-if="log.thinking_content" class="group rounded-lg border" open>
         <summary class="flex cursor-pointer items-center gap-2 p-3 font-semibold">
           <BrainCircuitIcon class="h-3.5 w-3.5 text-violet-600" /> 已返回的思考内容
@@ -113,9 +118,9 @@ const identifiers = computed(() => {
       <ToolDetails :tools="log.tools ?? []" @select="trace => emit('select', trace)" />
       <RoutingDetails :log="log" />
       <ResponsePanel :trace-id="log.trace_id" :status="log.status" />
-      <details v-if="log.replay" class="rounded-lg border">
+      <details v-if="log.replay" class="rounded-lg border" :open="comparisonOpen" @toggle="comparisonOpen = ($event.target as HTMLDetailsElement).open">
         <summary class="cursor-pointer p-3 font-semibold">对比来源响应</summary>
-        <ResponseComparison :source-trace="log.replay.of" :replay-trace="log.trace_id" :status="log.status" />
+        <ResponseComparison :source-trace="log.replay.of" :replay-trace="log.trace_id" :status="log.status" :replay-log="log" :active="comparisonOpen" @select="trace => emit('select', trace)" />
       </details>
       <details class="rounded-lg border">
         <summary class="cursor-pointer p-3 font-semibold">请求报文</summary>

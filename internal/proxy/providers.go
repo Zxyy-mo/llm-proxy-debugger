@@ -197,7 +197,11 @@ func (s *Server) ProviderHistoryHandler(w http.ResponseWriter, r *http.Request) 
 	// History reads do not invent another model execution or a producer trace.
 	policy := s.store.Privacy.Policy()
 	if policy.Record {
-		scope := correlation.ExtractRequest(req.Header, "/v1/responses", nil, p.BaseURL).Scope
+		identity := correlation.ExtractRequest(req.Header, "/v1/responses", nil, p.BaseURL).Scope
+		scope := "provider-history:v2:" + correlation.Hash(identity, input.ResponseID)
+		// A provider-history read has no captured trace that could own a reveal
+		// mapping. Keep it separate from conversation captures and do not retain.
+		policy.RetainRaw = false
 		body = s.store.Privacy.JSON(policy, scope, body)
 	}
 	json.NewEncoder(w).Encode(map[string]any{"provider_id": p.ID, "response_id": input.ResponseID, "status_code": response.StatusCode, "body": string(body), "source": "provider_history", "redacted": policy.Record})

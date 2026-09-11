@@ -83,9 +83,14 @@ func NewServer(cfg *config.Config, log *zap.Logger, h *hub.Hub, s *store.Store) 
 			return nil, fmt.Errorf("restore providers: %w", err)
 		}
 	}
-	server.replays = replay.New(func() {
-		s.SetSetting("replays", server.replays.Snapshot())
+	server.replays = replay.NewWithPersistence(func() {
 		h.Publish(map[string]any{"event": "replays_updated"})
+	}, func(saved []replay.Saved, durable bool) error {
+		if durable {
+			return s.SetSettingDurable("replays", saved)
+		}
+		s.SetSetting("replays", saved)
+		return nil
 	})
 	var saved []replay.Saved
 	if s.Setting("replays", &saved) {
@@ -135,14 +140,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 	scopeTarget := selection.Endpoints[0].BaseURL
 	input = correlation.ExtractRequest(r.Header, r.URL.Path, requestBody, scopeTarget)
 	requestPolicy := s.store.Privacy.Policy()
-	previewBody := requestBody
-	if requestPolicy.Record {
-		previewBody = s.store.Privacy.JSON(requestPolicy, input.Scope, requestBody)
-		input.Summary = correlation.ExtractRequest(r.Header, r.URL.Path, previewBody, scopeTarget).Summary
-		if !utf8.Valid(requestBody) {
-			previewBody = []byte("[非文本请求正文未展示：记录脱敏策略]")
-		}
-	}
 	var handler protocol.Handler = &protocol.AnthropicHandler{}
 	switch input.Protocol {
 	case "openai":
@@ -150,13 +147,13 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 	case "responses":
 		handler = &protocol.ResponsesHandler{}
 	}
-	initial := s.store.Begin(store.RequestLog{
+	initial := s.store.BeginWithBody(store.RequestLog{
 		Time: startTime.Format(time.RFC3339Nano), TraceID: traceID,
 		Type: "HTTP", ClientIP: clientIP, Method: r.Method, Path: r.URL.Path,
 		Query: export.RedactQuery(r.URL.RawQuery), Headers: extractHeaders(r.Header),
-		RequestBody: truncateBody(previewBody, s.cfg.MaxBodyLogSize), UserAgent: r.UserAgent(),
-		Replay: replayInfo,
-	}, input, requestPolicy)
+		UserAgent: r.UserAgent(),
+		Replay:    replayInfo,
+	}, input, requestBody, s.cfg.MaxBodyLogSize, requestPolicy)
 	s.store.CaptureOriginal(traceID, snapshotRequest(r, requestBody))
 	if replayOpts != nil {
 		replayOpts.markStarted()
@@ -319,14 +316,21 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		recorder.statusCode = status
 		return
 	}
-	outgoingBody = s.store.Outbound(traceID, outgoingBody)
-	if !bytes.Equal(outgoingBody, requestBody) {
-		updated := correlation.ExtractRequest(r.Header, r.URL.Path, outgoingBody, scopeTarget)
+	correlate := func(body []byte) correlation.Request {
+		updated := correlation.ExtractRequest(r.Header, r.URL.Path, body, scopeTarget)
 		if policy.Record {
-			safe := s.store.Privacy.JSON(policy, privacyScope, outgoingBody)
+			safe := s.store.Privacy.JSON(policy, privacyScope, body)
 			updated.Summary = correlation.ExtractRequest(r.Header, r.URL.Path, safe, scopeTarget).Summary
 		}
-		s.publishLog(s.store.UpdateInput(traceID, updated))
+		return updated
+	}
+	if !bytes.Equal(outgoingBody, requestBody) {
+		s.publishLog(s.store.UpdateInput(traceID, correlate(outgoingBody)))
+	}
+	preparedBody := outgoingBody
+	outgoingBody = s.store.Outbound(traceID, preparedBody)
+	if !bytes.Equal(outgoingBody, preparedBody) {
+		s.publishLog(s.store.UpdateOutboundInput(traceID, correlate(outgoingBody)))
 	}
 	s.store.ObserveToolResults(traceID, outgoingBody)
 	outgoingPath, convertedBody, conversion, conversionErr := adapter.Request(r.URL.Path, outgoingBody, selection.Endpoints[0].Protocol, selection.Model)

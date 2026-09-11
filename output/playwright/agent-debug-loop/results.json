@@ -1,0 +1,171 @@
+{
+  "date": "2026-09-11",
+  "base_commit": "00ec270",
+  "status": "accepted",
+  "fixture": {
+    "model_calls": 70,
+    "sessions": 3,
+    "traffic": "local synthetic Agent requests with explicit parent/tool evidence"
+  },
+  "checks": {
+    "go_race": "passed",
+    "go_vet": "passed",
+    "frontend_tests": 46,
+    "frontend_build": "passed",
+    "independent_review": "passed"
+  },
+  "browser": {
+    "journey": {
+      "script": "journey.js",
+      "passed": 23,
+      "source_trace": "42f66a5c-9d06-4fab-a7f7-24fc713cc876",
+      "replay_trace": "09183d77-6894-473e-b4ed-80525905c537",
+      "checks": "request finder, parent context, draft/header/credential continuity, lossless numeric edit, one upstream replay, readable status/output/metric evaluation, result/history return and storage isolation"
+    },
+    "replay_recovery": {
+      "script": "replay_recovery.js",
+      "passed": 18,
+      "ambiguity": [
+        {
+          "mode": "both-lost",
+          "posts": 2,
+          "executions": 1,
+          "key": "61e72eed-91af-4713-a3ec-721bd8774a7f",
+          "trace": "c4aa37a0-b526-4766-99bb-9aa8e21202e6"
+        },
+        {
+          "mode": "retry-503",
+          "posts": 2,
+          "executions": 1,
+          "key": "1142bed2-928b-4665-86f3-0cf2aea56dc0",
+          "trace": "f9105d42-bd67-46c3-a54c-01bb8bace01a"
+        }
+      ],
+      "canceled": [
+        "f4c3ab1b-323d-4ffb-9699-ed2b7c882ac9",
+        "156b17ad-1c05-4821-9838-a3b5f4039166"
+      ],
+      "checks": "reset/navigation/reload keep one cancelable execution; recovery reuses a frozen key and sends once"
+    },
+    "layout": {
+      "script": "layout_qa.js",
+      "passed": 27,
+      "viewports": [
+        [
+          1600,
+          1000
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1024,
+          768
+        ],
+        [
+          768,
+          600
+        ],
+        [
+          390,
+          844
+        ],
+        [
+          320,
+          640
+        ],
+        [
+          844,
+          390
+        ]
+      ],
+      "checks": "reachable controls and editor height, no document overflow, mobile/landscape corrected replay, readable graph focus, manual-camera stability and Show All"
+    },
+    "edge_states": {
+      "script": "edge_states.js",
+      "passed": 13,
+      "checks": [
+        {
+          "name": "comparison can be opened while executing",
+          "passed": true
+        },
+        {
+          "name": "open comparison refreshes output and terminal state automatically",
+          "passed": true
+        },
+        {
+          "name": "raw response follows the same terminal transition",
+          "passed": true
+        },
+        {
+          "name": "missing source is explicit and cannot be navigated",
+          "passed": true
+        },
+        {
+          "name": "surviving result remains readable",
+          "passed": true
+        },
+        {
+          "name": "source metadata can recover without losing result",
+          "passed": true
+        },
+        {
+          "name": "deep but valid capture is forwarded",
+          "passed": true
+        },
+        {
+          "name": "editor does not expand deep JSON",
+          "passed": true
+        },
+        {
+          "name": "incomplete structural comparison is disclosed",
+          "passed": true
+        },
+        {
+          "name": "initial fetch failure is distinct from no captures",
+          "passed": true
+        },
+        {
+          "name": "initial fetch failure can be retried",
+          "passed": true
+        },
+        {
+          "name": "empty capture state explains the next action",
+          "passed": true
+        },
+        {
+          "name": "header settings button is functional",
+          "passed": true
+        }
+      ],
+      "deep_trace": "99b63753-ddac-4e78-8ead-a63eb9084b27",
+      "source_trace": "42f66a5c-9d06-4fab-a7f7-24fc713cc876",
+      "surviving_replay": "9acd92c7-b9d5-4743-a72c-2fd3e65a5b3a"
+    },
+    "keyboard_filter": {
+      "script": "keyboard_filter.js",
+      "passed": 4,
+      "checks": [
+        {
+          "name": "settings action works with keyboard activation",
+          "passed": true
+        },
+        {
+          "name": "no-match state is explicit",
+          "passed": true
+        },
+        {
+          "name": "no-match filtering preserves the selected trace",
+          "passed": true
+        },
+        {
+          "name": "clearing filters restores request choices",
+          "passed": true
+        }
+      ],
+      "trace": "99b63753-ddac-4e78-8ead-a63eb9084b27"
+    },
+    "total_passed": 85
+  }
+}

@@ -47,6 +47,7 @@ type diskRecord struct {
 	UpstreamResponse   *ResponseSnapshot        `json:"upstream_response,omitempty"`
 	UpstreamPath       string                   `json:"upstream_path,omitempty"`
 	Privacy            privacy.Policy           `json:"privacy"`
+	PrivacyScope       string                   `json:"privacy_scope"`
 	ToolResults        []observation.ToolResult `json:"tool_results,omitempty"`
 }
 type diskState struct {
@@ -140,9 +141,15 @@ func (s *Store) changed() {
 func (s *Store) snapshotJSON() ([]byte, error) {
 	s.RLock()
 	defer s.RUnlock()
-	state := diskState{Version: 1, Revision: s.revision, Sequence: s.sequence, Rules: s.Rules, Sessions: s.sessions, Aliases: s.aliases, Owners: s.owners, Waiters: s.waiters, Children: s.children, History: s.history, Privacy: s.Privacy.Snapshot(), Settings: s.settings}
+	return s.snapshotJSONLocked()
+}
+
+// snapshotJSONLocked requires the caller to hold the store lock for reading
+// or writing until all referenced records and indices have been encoded.
+func (s *Store) snapshotJSONLocked() ([]byte, error) {
+	state := diskState{Version: 2, Revision: s.revision, Sequence: s.sequence, Rules: s.Rules, Sessions: s.sessions, Aliases: s.aliases, Owners: s.owners, Waiters: s.waiters, Children: s.children, History: s.history, Privacy: s.Privacy.Snapshot(), Settings: s.settings}
 	for _, rec := range s.orderedRecords() {
-		item := diskRecord{Log: rec.log, Input: rec.input, Sequence: rec.sequence, Fixed: rec.fixedSession, Preferred: rec.preferredSession, Capture: rec.capture, Response: rec.response, Privacy: rec.privacy}
+		item := diskRecord{Log: rec.log, Input: rec.input, Sequence: rec.sequence, Fixed: rec.fixedSession, Preferred: rec.preferredSession, Capture: rec.capture, Response: rec.response, Privacy: rec.privacy, PrivacyScope: rec.privacyScope}
 		item.ToolResults = rec.toolResults
 		if rec.capture != nil {
 			item.OriginalForwarding = rec.capture.Original.Forwarding
@@ -168,7 +175,7 @@ func (s *Store) restore(payload []byte) error {
 	if err := json.Unmarshal(payload, &state); err != nil {
 		return err
 	}
-	if state.Version != 1 {
+	if state.Version != 1 && state.Version != 2 {
 		return fmt.Errorf("unsupported state version %d", state.Version)
 	}
 	s.revision, s.sequence = state.Revision, state.Sequence
@@ -198,7 +205,15 @@ func (s *Store) restore(payload []byte) error {
 		return err
 	}
 	for _, item := range state.Records {
-		rec := &record{log: item.Log, input: item.Input, sequence: item.Sequence, fixedSession: item.Fixed, preferredSession: item.Preferred, capture: item.Capture, response: item.Response, privacy: item.Privacy}
+		scope := item.PrivacyScope
+		if state.Version == 1 {
+			// Legacy placeholders were generated from the credential scope. Keep
+			// their dictionary readable without giving it to new captures.
+			scope = item.Input.Scope
+		} else if scope == "" {
+			return fmt.Errorf("record %q has no privacy namespace", item.Log.TraceID)
+		}
+		rec := &record{log: item.Log, input: item.Input, sequence: item.Sequence, fixedSession: item.Fixed, preferredSession: item.Preferred, capture: item.Capture, response: item.Response, privacy: item.Privacy, privacyScope: scope}
 		rec.toolResults = item.ToolResults
 		if rec.capture != nil {
 			rec.capture.Original.Forwarding = item.OriginalForwarding
@@ -244,17 +259,10 @@ func (s *Store) Flush() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return errors.New("history database closed")
+		return p.saveLocked(nil, nil)
 	}
 	payload, err := s.snapshotJSON()
-	if err == nil {
-		_, err = p.db.Exec("INSERT INTO gateway_state(id,payload) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", payload)
-	}
-	p.err = err
-	if err == nil {
-		p.lastSave = time.Now().UTC()
-	}
-	return err
+	return p.saveLocked(payload, err)
 }
 
 func (s *Store) Close() error {

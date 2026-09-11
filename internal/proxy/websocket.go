@@ -108,13 +108,8 @@ func (s *Server) newWSCall(r *http.Request, connection, lane string, body []byte
 	endpoint := selection.Endpoints[0]
 	input := correlation.ExtractRequest(r.Header, r.URL.Path, body, endpoint.BaseURL)
 	policy := s.store.Privacy.Policy()
-	preview := body
-	if policy.Record {
-		preview = s.store.Privacy.JSON(policy, input.Scope, body)
-		input.Summary = correlation.ExtractRequest(r.Header, r.URL.Path, preview, endpoint.BaseURL).Summary
-	}
 	info := store.WebSocketInfo{ConnectionID: connection, StreamID: lane, EventID: gjson.GetBytes(body, "event_id").String()}
-	initial := s.store.Begin(store.RequestLog{TraceID: trace, Time: started.Format(time.RFC3339Nano), Type: "WebSocket", Method: "WS", Path: r.URL.Path, Query: export.RedactQuery(r.URL.RawQuery), ClientIP: getClientIP(r), UserAgent: r.UserAgent(), Headers: extractHeaders(r.Header), RequestBody: truncateBody(preview, s.cfg.MaxBodyLogSize), WebSocket: &info}, input, policy)
+	initial := s.store.BeginWithBody(store.RequestLog{TraceID: trace, Time: started.Format(time.RFC3339Nano), Type: "WebSocket", Method: "WS", Path: r.URL.Path, Query: export.RedactQuery(r.URL.RawQuery), ClientIP: getClientIP(r), UserAgent: r.UserAgent(), Headers: extractHeaders(r.Header), WebSocket: &info}, input, body, s.cfg.MaxBodyLogSize, policy)
 	snapshot := snapshotRequest(r, body)
 	snapshot.Method = "WS"
 	snapshot.ContentLength = int64(len(body))
@@ -122,8 +117,9 @@ func (s *Server) newWSCall(r *http.Request, connection, lane string, body []byte
 	recorder := newResponseRecorder(&replayWriter{header: make(http.Header)}, trace, &protocol.ResponsesHandler{}, s.hub, s.logger, s.cfg.MaxBodyLogSize, filepath.Join(s.cfg.LogDir, "sse"))
 	recorder.isSSE = true
 	if policy.Record {
+		_, scope := s.store.PrivacyContext(trace)
 		recorder.private = true
-		recorder.project = func(body []byte) []byte { return s.store.Privacy.JSON(policy, input.Scope, body) }
+		recorder.project = func(body []byte) []byte { return s.store.Privacy.JSON(policy, scope, body) }
 	}
 	recorder.onTools = func(calls []observation.ToolCall) { s.store.ObserveTools(trace, calls) }
 	recorder.onResponse = func(response correlation.Response) {
@@ -361,15 +357,21 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					}
 					continue
 				}
-				body = s.store.Outbound(call.trace, prepared)
-				if !bytes.Equal(body, message.data) {
+				correlate := func(body []byte) correlation.Request {
 					updated := correlation.ExtractRequest(r.Header, r.URL.Path, body, endpoint.BaseURL)
 					policy, scope := s.store.PrivacyContext(call.trace)
 					if policy.Record {
 						safe := s.store.Privacy.JSON(policy, scope, body)
 						updated.Summary = correlation.ExtractRequest(r.Header, r.URL.Path, safe, endpoint.BaseURL).Summary
 					}
-					s.publishLog(s.store.UpdateInput(call.trace, updated))
+					return updated
+				}
+				if !bytes.Equal(prepared, message.data) {
+					s.publishLog(s.store.UpdateInput(call.trace, correlate(prepared)))
+				}
+				body = s.store.Outbound(call.trace, prepared)
+				if !bytes.Equal(body, prepared) {
+					s.publishLog(s.store.UpdateOutboundInput(call.trace, correlate(body)))
 				}
 				s.store.ObserveToolResults(call.trace, body)
 			}

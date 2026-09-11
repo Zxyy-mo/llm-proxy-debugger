@@ -82,7 +82,7 @@ func (s *Store) CaptureOriginal(traceID string, snapshot RequestSnapshot) {
 	defer s.Unlock()
 	if rec := s.records[traceID]; rec != nil {
 		if rec.privacy.Record && !rec.privacy.RetainRaw {
-			snapshot = s.projectSnapshot(snapshot, rec.privacy, rec.input.Scope)
+			snapshot = s.projectSnapshot(snapshot, rec.privacy, rec.privacyScope)
 		}
 		snapshot = s.stashSnapshot(traceID, "original", snapshot)
 		rec.capture = &RequestCapture{TraceID: traceID, Original: copySnapshot(snapshot)}
@@ -95,7 +95,7 @@ func (s *Store) CaptureOutgoing(traceID string, snapshot RequestSnapshot) {
 	defer s.Unlock()
 	if rec := s.records[traceID]; rec != nil && rec.capture != nil {
 		if rec.privacy.Record && !rec.privacy.RetainRaw {
-			snapshot = s.projectSnapshot(snapshot, rec.privacy, rec.input.Scope)
+			snapshot = s.projectSnapshot(snapshot, rec.privacy, rec.privacyScope)
 		}
 		snapshot = s.stashSnapshot(traceID, "outgoing", snapshot)
 		outgoing := copySnapshot(snapshot)

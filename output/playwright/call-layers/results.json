@@ -1,0 +1,452 @@
+{
+  "date": "2026-09-11",
+  "branch": "feat/agent-debugger-workflow",
+  "source": "controlled_mock_and_browser",
+  "journey": {
+    "checks": [
+      {
+        "name": "已加载独立受控会话",
+        "passed": true
+      },
+      {
+        "name": "任务筛选保留三个分支请求及七个完整图节点",
+        "passed": true
+      },
+      {
+        "name": "任务汇总显示真实六次上游发送",
+        "passed": true
+      },
+      {
+        "name": "请求详情显示任务证据",
+        "passed": true
+      },
+      {
+        "name": "两次上游结果保留各自状态",
+        "passed": true
+      },
+      {
+        "name": "第一次出站内容没有被备用上游覆盖",
+        "passed": true
+      },
+      {
+        "name": "逐次快照保留大整数和实际模型名",
+        "passed": true
+      },
+      {
+        "name": "可通过实际链接下载独立出站正文",
+        "passed": true
+      },
+      {
+        "name": "切换尝试只展示选中出站",
+        "passed": true
+      },
+      {
+        "name": "刷新保留任务筛选与正在调查的请求",
+        "passed": true
+      },
+      {
+        "name": "任务筛选不会自动替换当前调查请求",
+        "passed": true
+      },
+      {
+        "name": "冲突请求提供明确的未关联说明",
+        "passed": true
+      },
+      {
+        "name": "任务查询失败保留选择并提供重试",
+        "passed": true
+      },
+      {
+        "name": "出站读取失败不会残留另一尝试正文",
+        "passed": true
+      },
+      {
+        "name": "出站读取可以独立恢复",
+        "passed": true
+      },
+      {
+        "name": "查看、筛选、下载、刷新和错误重试没有创建上游调用",
+        "passed": true
+      },
+      {
+        "name": "没有浏览器运行时错误",
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "upstream_count": 15,
+    "trace_id": "9872e79f-f119-4420-81d7-6db35c9da02f",
+    "run_id": "run:83ad8634ecf68497a1dbbc237b532cb1ad0c6cb70cf73ef2107e2ad3b7fd5d19"
+  },
+  "layout": {
+    "checks": [
+      {
+        "name": "320×568 任务选择",
+        "passed": true
+      },
+      {
+        "name": "320×568 详情导航",
+        "passed": true
+      },
+      {
+        "name": "320×568 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "320×568 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "320×568 正文下载",
+        "passed": true
+      },
+      {
+        "name": "320×568 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "320×568 无横向溢出",
+        "passed": true
+      },
+      {
+        "name": "320×640 任务选择",
+        "passed": true
+      },
+      {
+        "name": "320×640 详情导航",
+        "passed": true
+      },
+      {
+        "name": "320×640 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "320×640 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "320×640 正文下载",
+        "passed": true
+      },
+      {
+        "name": "320×640 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "320×640 无横向溢出",
+        "passed": true
+      },
+      {
+        "name": "390×844 任务选择",
+        "passed": true
+      },
+      {
+        "name": "390×844 详情导航",
+        "passed": true
+      },
+      {
+        "name": "390×844 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "390×844 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "390×844 正文下载",
+        "passed": true
+      },
+      {
+        "name": "390×844 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "390×844 无横向溢出",
+        "passed": true
+      },
+      {
+        "name": "844×390 任务选择",
+        "passed": true
+      },
+      {
+        "name": "844×390 详情导航",
+        "passed": true
+      },
+      {
+        "name": "844×390 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "844×390 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "844×390 正文下载",
+        "passed": true
+      },
+      {
+        "name": "844×390 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "844×390 无横向溢出",
+        "passed": true
+      },
+      {
+        "name": "768×1024 任务选择",
+        "passed": true
+      },
+      {
+        "name": "768×1024 详情导航",
+        "passed": true
+      },
+      {
+        "name": "768×1024 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "768×1024 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "768×1024 正文下载",
+        "passed": true
+      },
+      {
+        "name": "768×1024 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "768×1024 无横向溢出",
+        "passed": true
+      },
+      {
+        "name": "1024×768 任务选择",
+        "passed": true
+      },
+      {
+        "name": "1024×768 详情导航",
+        "passed": true
+      },
+      {
+        "name": "1024×768 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "1024×768 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "1024×768 正文下载",
+        "passed": true
+      },
+      {
+        "name": "1024×768 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "1024×768 无横向溢出",
+        "passed": true
+      },
+      {
+        "name": "1440×900 任务选择",
+        "passed": true
+      },
+      {
+        "name": "1440×900 详情导航",
+        "passed": true
+      },
+      {
+        "name": "1440×900 尝试展开",
+        "passed": true
+      },
+      {
+        "name": "1440×900 出站内容切换",
+        "passed": true
+      },
+      {
+        "name": "1440×900 正文下载",
+        "passed": true
+      },
+      {
+        "name": "1440×900 正文区域保持可读高度",
+        "passed": true
+      },
+      {
+        "name": "1440×900 无横向溢出",
+        "passed": true
+      }
+    ],
+    "viewports": [
+      [
+        320,
+        568
+      ],
+      [
+        320,
+        640
+      ],
+      [
+        390,
+        844
+      ],
+      [
+        844,
+        390
+      ],
+      [
+        768,
+        1024
+      ],
+      [
+        1024,
+        768
+      ],
+      [
+        1440,
+        900
+      ]
+    ]
+  },
+  "replay": {
+    "checks": [
+      {
+        "name": "未开启工作台的空来源在刷新后仍为空",
+        "passed": true
+      },
+      {
+        "name": "进入重放后保留捕获正文的大整数",
+        "passed": true
+      },
+      {
+        "name": "工作台不占用任务筛选栏空间",
+        "passed": true
+      },
+      {
+        "name": "320×640 重放正文保持可用高度",
+        "passed": true
+      },
+      {
+        "name": "844×390 重放正文保持可用高度",
+        "passed": true
+      },
+      {
+        "name": "一次重放仅增加一次已固定备用上游的请求",
+        "passed": true
+      },
+      {
+        "name": "精确重放创建独立任务并保留来源",
+        "passed": true
+      },
+      {
+        "name": "新任务没有修改重放正文",
+        "passed": true
+      },
+      {
+        "name": "结果详情显示重放任务来源说明",
+        "passed": true
+      },
+      {
+        "name": "刷新结果不会再次执行",
+        "passed": true
+      },
+      {
+        "name": "临时重放凭证未写入浏览器存储",
+        "passed": true
+      }
+    ],
+    "source_trace": "9872e79f-f119-4420-81d7-6db35c9da02f",
+    "replay_trace": "9814f91b-bc62-4ff7-8d73-f3b79ff96f5a",
+    "replay_run": "run:replay:00f7735a-4c44-4724-b590-97081ce4bc92"
+  },
+  "restart": {
+    "checks": [
+      {
+        "name": "实际 SQLite 快照为 v3 且活动尝试已落盘",
+        "passed": true
+      },
+      {
+        "name": "恢复没有新增或遗漏模型记录",
+        "passed": true
+      },
+      {
+        "name": "请求和任务身份恢复 41a1b232",
+        "passed": true
+      },
+      {
+        "name": "逐次尝试身份恢复 41a1b232",
+        "passed": true
+      },
+      {
+        "name": "独立出站文件哈希一致 10c40be5",
+        "passed": true
+      },
+      {
+        "name": "独立出站文件哈希一致 fdf175e1",
+        "passed": true
+      },
+      {
+        "name": "请求和任务身份恢复 715b3f55",
+        "passed": true
+      },
+      {
+        "name": "逐次尝试身份恢复 715b3f55",
+        "passed": true
+      },
+      {
+        "name": "独立出站文件哈希一致 175d239b",
+        "passed": true
+      },
+      {
+        "name": "请求和任务身份恢复 478f6a38",
+        "passed": true
+      },
+      {
+        "name": "逐次尝试身份恢复 478f6a38",
+        "passed": true
+      },
+      {
+        "name": "独立出站文件哈希一致 5ff16860",
+        "passed": true
+      },
+      {
+        "name": "独立出站文件哈希一致 bb09b125",
+        "passed": true
+      },
+      {
+        "name": "活动请求恢复为中断失败",
+        "passed": true
+      },
+      {
+        "name": "活动尝试恢复为 interrupted，结束时刻与耗时保持未知",
+        "passed": true
+      },
+      {
+        "name": "已完成尝试不被重启改写为中断",
+        "passed": true
+      },
+      {
+        "name": "重放幂等键跨进程恢复",
+        "passed": true
+      },
+      {
+        "name": "重启、下载及同键重试不补发请求",
+        "passed": true
+      }
+    ],
+    "requests": 3,
+    "attempts": 5,
+    "upstream_requests": 5,
+    "source": "controlled_process_restart"
+  },
+  "automated": {
+    "go_race": "passed",
+    "go_vet": "passed",
+    "frontend_tests": 53,
+    "frontend_build": "passed"
+  },
+  "limits": [
+    "未验证四类真实平台实例",
+    "不含完整 Agent/MCP 工作流重放或自动 SDK 插桩"
+  ]
+}

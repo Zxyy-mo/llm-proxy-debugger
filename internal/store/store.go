@@ -20,6 +20,8 @@ type RequestLog struct {
 	Time               string                 `json:"time"`
 	TraceID            string                 `json:"trace_id,omitempty"`
 	SessionID          string                 `json:"session_id,omitempty"`
+	RunID              string                 `json:"run_id,omitempty"`
+	Run                *RunAssociation        `json:"run,omitempty"`
 	Type               string                 `json:"type"`
 	ClientIP           string                 `json:"client_ip"`
 	Method             string                 `json:"method"`
@@ -96,6 +98,7 @@ type record struct {
 	fixedSession     bool
 	preferredSession string
 	capture          *RequestCapture
+	attemptCaptures  map[string]RequestSnapshot
 	response         *ResponseSnapshot
 	upstreamResponse *ResponseSnapshot
 	privacy          privacy.Policy

@@ -29,11 +29,14 @@ import ResponsePanel from '@/components/ResponsePanel.vue'
 import GatewaySettings from '@/components/GatewaySettings.vue'
 import RoutingDetails from '@/components/RoutingDetails.vue'
 import RequestFinder from '@/components/RequestFinder.vue'
+import RunNavigator from '@/components/RunNavigator.vue'
+import RunDetails from '@/components/RunDetails.vue'
 import RequestActions from '@/components/RequestActions.vue'
 import ResponseComparison from '@/components/ResponseComparison.vue'
 import ToolDetails from '@/components/ToolDetails.vue'
 import { formatTokens, totalTokenLabel, timing } from '@/lib/metrics'
 import { findRequests, type RequestOrder } from '@/lib/requestFinder'
+import { requestsInRun, runLabel } from '@/lib/callLayers'
 import type { AuditMode, InvestigationAction } from '@/lib/investigation'
 import { initialReplayOperation, type ReplayOperationState } from '@/lib/replayOperation'
 import {
@@ -89,16 +92,20 @@ const replayRefreshKey = ref(0)
 const mobileInspectorOpen = ref(false)
 const showInspector = ref(true)
 const narrowLayout = useMediaQuery('(max-width: 1023px)')
+// 短横屏已有可见侧栏可选请求，省去重复的顶部选择框，为正文保留可读高度。
+const compactLandscape = useMediaQuery('(min-width: 768px) and (max-height: 500px)')
 const requestQuery = ref('')
 const requestStatus = ref('')
 const requestOrder = ref<RequestOrder>('newest')
+const activeRunId = ref(typeof saved.run === 'string' ? saved.run : '')
 const mobileFinderOpen = ref(false)
 const sessionLoading = ref(false)
 const sessionsLoaded = ref(false)
 const sessionError = ref('')
 const selectionLoading = ref(false)
 const selectionError = ref('')
-const auditSourceTraceId = ref<string | null>(typeof saved.auditTrace === 'string' ? saved.auditTrace : activeLogTraceId.value)
+// 显式保存的 null 表示尚未打开工作台，刷新不能把当前请求误作已有重放草稿来源。
+const auditSourceTraceId = ref<string | null>(saved.auditTrace === null ? null : typeof saved.auditTrace === 'string' ? saved.auditTrace : activeLogTraceId.value)
 const auditMode = ref<AuditMode>(saved.auditMode === 'context' || saved.auditMode === 'curl' || saved.auditMode === 'replay' ? saved.auditMode : 'compare')
 const replayOperation = ref<ReplayOperationState>(initialReplayOperation())
 const requestAudit = ref<InstanceType<typeof RequestAudit> | null>(null)
@@ -120,17 +127,19 @@ let disposed = false
 let selectionController: AbortController | undefined
 const observedDuringRefresh = new Set<string>()
 
-watch([activeSessionId, activeLogTraceId, activeView, graphScope, auditSourceTraceId, auditMode], () => {
+watch([activeSessionId, activeLogTraceId, activeView, graphScope, auditSourceTraceId, auditMode, activeRunId], () => {
   try {
     localStorage.setItem('llm-debugger.selection', JSON.stringify({
       session: activeSessionId.value, trace: activeLogTraceId.value, view: activeView.value, scope: graphScope.value,
       auditTrace: auditSourceTraceId.value, auditMode: auditMode.value,
+      run: activeRunId.value,
     }))
   } catch {
     // Selection still works when browser storage is disabled.
   }
 })
 watch(activeView, view => { if (view !== 'graph') graphFocusKey.value = 0 })
+watch(activeSessionId, () => { activeRunId.value = '' })
 
 const sessionList = computed(() =>
   Object.values(sessions).sort((a, b) => {
@@ -149,7 +158,7 @@ const activeLog = computed<LiveLog | null>(() => {
   if (!s || !activeLogTraceId.value) return null
   return s.logs.find((l) => l.trace_id === activeLogTraceId.value) ?? null
 })
-const filteredLogs = computed(() => findRequests(activeSession.value?.logs ?? [], requestQuery.value, requestStatus.value, requestOrder.value))
+const filteredLogs = computed(() => findRequests(requestsInRun(activeSession.value?.logs ?? [], activeRunId.value), requestQuery.value, requestStatus.value, requestOrder.value))
 const selectedOutsideFilter = computed(() => Boolean(activeLog.value && !filteredLogs.value.some(log => log.trace_id === activeLogTraceId.value)))
 const comparisonSourceLog = computed(() => {
   const trace = activeLog.value?.replay?.of
@@ -158,7 +167,7 @@ const comparisonSourceLog = computed(() => {
 const operationNeedsAttention = computed(() => replayOperation.value.phase === 'submitting' || replayOperation.value.phase === 'unknown' || replayOperation.value.record?.state === 'running')
 const showOperationBanner = computed(() => operationNeedsAttention.value && !(activeView.value === 'audit' && auditMode.value === 'replay'))
 
-function clearRequestFilter() { requestQuery.value = ''; requestStatus.value = ''; requestOrder.value = 'newest' }
+function clearRequestFilter() { requestQuery.value = ''; requestStatus.value = ''; requestOrder.value = 'newest'; activeRunId.value = '' }
 
 function lastLogTime(s: Session): number {
   if (!s.logs?.length) return new Date(s.created_at).getTime()
@@ -383,6 +392,7 @@ function selectSession(id: string) {
   selectionController?.abort()
   selectionLoading.value = false
   selectionError.value = ''
+  activeRunId.value = ''
   activeSessionId.value = id
   const s = sessions[id]
   activeLogTraceId.value = s?.logs?.[0]?.trace_id ?? null
@@ -739,6 +749,7 @@ async function submitRule() {
                     </div>
                     <div class="truncate text-muted-foreground mt-0.5 font-mono">{{ log.path }}</div>
                     <div v-if="log.summary" class="mt-1 truncate text-[10px]">{{ log.summary }}</div>
+                    <div class="mt-1 truncate text-[10px] text-teal-800">{{ runLabel(log.run_id, log.run) }}</div>
                     <div class="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
                       <span>{{ totalTokens(log) }} tk</span>
                       <span>{{ log.status === 'running' || log.status === 'pending' ? statusLabel(log.status) : formatDuration(log.duration_ms) }}</span>
@@ -791,12 +802,14 @@ async function submitRule() {
                 <Button v-if="historyReturnAvailable && activeView !== 'manage'" size="sm" variant="ghost" class="h-7 text-[11px]" @click="returnToHistory">返回历史查询</Button>
                 <template v-if="showOperationBanner"><span role="status" class="break-words text-violet-900">{{ replayOperation.phase === 'unknown' ? '有一笔重放尚未确认发送结果' : replayOperation.phase === 'submitting' ? '正在提交重放' : '有一笔重放进行中' }}</span><Button size="sm" variant="outline" class="h-7 text-[11px]" @click="returnToWorkbench(replayOperation.sourceTrace)">查看本次重放</Button><Button v-if="replayOperation.record?.state === 'running'" size="sm" variant="destructive" class="h-7 text-[11px]" :disabled="replayOperation.busy" @click="requestAudit?.cancelOperation()">取消重放</Button></template>
               </div>
+              <RunNavigator v-if="activeSession && (activeView === 'graph' || activeView === 'details')" v-model="activeRunId" :session-id="activeSession.id" :refresh-key="graphRefreshKey" />
+              <p v-if="activeRunId && selectedOutsideFilter && (activeView === 'graph' || activeView === 'details')" class="shrink-0 border-b bg-amber-50 px-3 py-1.5 text-[11px] text-amber-900">当前查看的请求在任务筛选外，已保留选择。<button v-if="filteredLogs[0]" type="button" class="ml-1 underline" @click="selectLog(filteredLogs[0].trace_id)">查看筛选结果</button></p>
               <details v-if="narrowLayout && activeView !== 'intercept' && activeView !== 'manage'" class="shrink-0 border-b bg-card px-3" :open="mobileFinderOpen" @toggle="mobileFinderOpen = ($event.target as HTMLDetailsElement).open">
-                <summary class="cursor-pointer py-2 text-[11px] font-medium">筛选请求 · {{ filteredLogs.length }} / {{ activeSession?.logs.length ?? 0 }}<span v-if="requestStatus || requestQuery" class="ml-2 text-teal-800">已筛选</span></summary>
+                <summary class="cursor-pointer py-2 text-[11px] font-medium">筛选请求 · {{ filteredLogs.length }} / {{ activeSession?.logs.length ?? 0 }}<span v-if="requestStatus || requestQuery || activeRunId" class="ml-2 text-teal-800">已筛选</span></summary>
                 <RequestFinder v-model:query="requestQuery" v-model:status="requestStatus" v-model:order="requestOrder" :matched="filteredLogs.length" :total="activeSession?.logs.length ?? 0" class="pb-2" />
                 <p v-if="selectedOutsideFilter" class="pb-2 text-[10px] text-amber-800">当前请求不在筛选结果中，已保留选择。</p>
               </details>
-              <div v-if="narrowLayout && activeView !== 'intercept' && activeView !== 'manage'" class="flex shrink-0 items-center gap-2 border-b bg-card px-3 py-2">
+              <div v-if="narrowLayout && !compactLandscape && activeView !== 'intercept' && activeView !== 'manage'" class="flex shrink-0 items-center gap-2 border-b bg-card px-3 py-2">
                 <label for="active-request" class="shrink-0 text-[11px] text-muted-foreground">当前请求</label>
                 <select id="active-request" class="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs" :value="activeLogTraceId ?? ''" @change="changeMobileLog">
                   <option v-if="!filteredLogs.length" value="" disabled>{{ activeSession?.logs.length ? '没有匹配的请求' : '暂无请求' }}</option>
@@ -831,6 +844,7 @@ async function submitRule() {
                     <div class="flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-muted-foreground"><span>输入 {{ formatTokens(activeLog.input_tokens, activeLog.token_sources?.input) }}</span><span>输出 {{ formatTokens(activeLog.output_tokens, activeLog.token_sources?.output) }}</span><span>总耗时 {{ activeLog.status === 'running' || activeLog.status === 'pending' ? statusLabel(activeLog.status) : formatDuration(activeLog.duration_ms) }}</span><span>等待 {{ activeLog.status === 'pending' ? '等待中' : timing(activeLog.wait_duration_ms) }}</span><span>上游 {{ activeLog.status === 'running' ? '进行中' : timing(activeLog.upstream_duration_ms) }}</span><span>首内容 {{ timing(activeLog.ttfc_ms) }}</span></div>
                     <p v-if="activeLog.error" role="alert" class="break-words rounded border border-red-200 bg-red-50 p-3 text-xs text-red-900">{{ activeLog.error }}</p>
                   </div>
+                  <RunDetails :log="activeLog" />
                   <div v-if="activeLog.replay" ref="comparisonElement" class="min-w-0 outline-none" tabindex="-1" aria-label="来源与重放结果">
                     <ResponseComparison :source-trace="activeLog.replay.of" :replay-trace="activeLog.trace_id" :status="activeLog.status" :source-log="comparisonSourceLog" :replay-log="activeLog" @select="trace => selectTrace(trace, 'details')" />
                   </div>

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -116,6 +117,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handleHTTP(w, r, startTime, clientIP)
 }
 
+// handleHTTP 固定入站请求身份和策略，经过编辑/转换后逐次发送，并分别结算请求与上游尝试。
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime time.Time, clientIP string) {
 	replayOpts := replayFrom(r.Context())
 	traceID := uuid.New().String()
@@ -159,6 +161,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		replayOpts.markStarted()
 	}
 	w.Header().Set("X-Gateway-Trace-ID", traceID)
+	if initial.RunID != "" {
+		w.Header().Set("X-Gateway-Run-ID", initial.RunID)
+	}
 	s.hub.Publish(map[string]interface{}{
 		"event": "request_start", "trace_id": traceID, "session_id": initial.SessionID,
 		"method": r.Method, "path": r.URL.Path, "time": initial.Time, "log": initial,
@@ -179,6 +184,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 	}
 	var proxyErr error
 	var upstreamStarted time.Time
+	var selectedAttempt *upstreamAttempt
 	defer func() {
 		panicValue := recover()
 		if panicValue == http.ErrAbortHandler {
@@ -210,6 +216,12 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		if status, err := s.interrupted(r, traceID); err != nil {
 			proxyErr = err
 			log.StatusCode = status
+		}
+		if proxyErr != nil {
+			selectedAttempt.finish("error", proxyErr)
+			selectedAttempt.observationFailure(proxyErr)
+		} else {
+			selectedAttempt.finish("done", nil)
 		}
 		log.InputTokens, log.OutputTokens = recorder.accumulator.InputTokens, recorder.accumulator.OutputTokens
 		log.TokenSources = recorder.accumulator.TokenSources
@@ -349,6 +361,12 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		routeInfo.Conversion = input.Protocol + " → openai"
 	}
 	s.store.SetRoute(traceID, routeInfo)
+	// 能力检查依据转换后的实际接口；本地拒绝不会创建已发送的 Attempt。
+	if err := selection.Endpoints[0].CheckEndpoint(outgoingPath); err != nil {
+		proxyErr = err
+		writeProtocolError(recorder, input.Protocol, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	if !bytes.Equal(outgoingBody, requestBody) {
 		r.Body = io.NopCloser(bytes.NewReader(outgoingBody))
 		r.ContentLength = int64(len(outgoingBody))
@@ -361,15 +379,14 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 		Director: func(req *http.Request) {
 			req.Header.Del("Accept-Encoding")
 		},
-		Transport: routeTransport{base: s.transport, selection: selection, path: outgoingPath, rawPath: outgoingRawPath, body: outgoingBody, conversion: conversion, info: routeInfo,
-			capture: func(req *http.Request, endpoint provider.Provider) {
-				snapshot := snapshotRequest(req, outgoingBody)
-				snapshot.Forwarding.ProviderID, snapshot.Forwarding.BaseURL = endpoint.ID, endpoint.BaseURL
-				s.store.CaptureOutgoing(traceID, snapshot)
-			}, started: func() {
-				upstreamStarted = time.Now()
+		Transport: routeTransport{base: s.transport, selection: selection, path: outgoingPath, rawPath: outgoingRawPath, body: outgoingBody, conversion: conversion,
+			attempt: func(req *http.Request, endpoint provider.Provider) *upstreamAttempt {
+				selectedAttempt = s.beginUpstreamAttempt(traceID, req, endpoint, outgoingBody, "http")
+				return selectedAttempt
+			}, started: func(at time.Time) {
+				upstreamStarted = at
 				recorder.upstreamAt = upstreamStarted
-			}, update: func(info store.RouteInfo) { s.store.SetRoute(traceID, info) }, received: func(at time.Time) { recorder.headersAt = at }, upstream: func(resp *http.Response) *http.Response {
+			}, received: func(at time.Time) { recorder.headersAt = at }, upstream: func(resp *http.Response) *http.Response {
 				return s.captureConversionUpstream(traceID, resp, policy.Record)
 			}},
 		ModifyResponse: func(resp *http.Response) error {
@@ -413,6 +430,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, startTime ti
 				recorder.statusCode = status
 				return
 			}
+			var unsupported *provider.UnsupportedEndpointError
+			if errors.As(err, &unsupported) {
+				writeProtocolError(w, input.Protocol, http.StatusUnprocessableEntity, err.Error())
+				return
+			}
 			s.logger.Error("❌ 代理请求失败", zap.String("trace_id", traceID), zap.Error(err))
 			http.Error(w, "代理请求失败", http.StatusBadGateway)
 		},
@@ -436,6 +458,7 @@ func (s *Server) asyncLog(reqLog store.RequestLog) {
 		s.logger.Info("📝 请求详情",
 			zap.String("trace_id", reqLog.TraceID),
 			zap.String("session_id", reqLog.SessionID),
+			zap.String("run_id", reqLog.RunID),
 			zap.String("parent_trace_id", reqLog.Correlation.ParentTraceID),
 			zap.String("link_source", reqLog.Correlation.LinkSource),
 			zap.String("response_id", reqLog.Correlation.ResponseID),

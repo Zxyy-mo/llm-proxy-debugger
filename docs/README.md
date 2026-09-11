@@ -4,6 +4,8 @@ The versioned contracts below describe the current `feat/agent-debugger-workflow
 
 ## Implemented contracts
 
+- [会话、任务、请求与上游尝试](contracts/call-layers.md)
+- [CPA、New API、Sub2API、vLLM 兼容接入与模型发现](contracts/compatible-providers.md)
 - [Operator investigation, replay recovery and result evaluation](contracts/operator-workflow.md)
 - [Conversation correlation and graph](contracts/conversation-graph.md)
 - [HTTP interception and full request captures](contracts/request-interception.md)
@@ -16,6 +18,8 @@ The versioned contracts below describe the current `feat/agent-debugger-workflow
 
 ## Delivery and evidence
 
+- [四层调用模型验收](../output/playwright/call-layers/verification.md)
+- [兼容上游配置与浏览器验收](../output/playwright/compatible-provider-setup/verification.md)
 - [Practical debugging guide](USAGE.md)
 - [Foundation refinement verification](../output/playwright/foundation-refinement/verification.md)
 - [End-to-end operator workflow verification](../output/playwright/agent-debug-loop/verification.md)

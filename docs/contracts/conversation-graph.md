@@ -2,6 +2,8 @@
 
 Correlation is computed server-side, before request/response log truncation. `internal/correlation` normalizes protocol-visible messages and hashes them; `internal/store` owns identifiers, parent links and graph projection under its mutex. Frontend code must render server-provided edges, not infer causality from timestamps.
 
+`trace_id` 继续表示一次 Request。日志及请求图节点增加独立 `run_id`/`run`，会话/父子边仍使用本契约；Run 归属不创建新因果边，任务筛选也不裁掉会话图中的其他节点。提取、歧义、作用域与新查询 API 见 [四层调用契约](call-layers.md)。
+
 ## API and lifecycle
 
 `GET /api/graph?session_id=<encoded ID>` returns `{revision, session_id, nodes, edges}` with non-null arrays. Unknown session: 404 JSON error. Other methods: 405 JSON error and `Allow: GET`. Unfiltered requests return the whole captured graph.

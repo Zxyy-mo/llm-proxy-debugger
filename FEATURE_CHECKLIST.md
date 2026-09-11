@@ -2,6 +2,19 @@
 
 更新日期：2026-09-11。当前开发分支：`feat/agent-debugger-workflow`。这里记录可使用的功能；Provider 本身未提供的能力和完整 Agent 执行器不计为已实现。
 
+## 四层调用与兼容接入
+
+- [x] 会话 → 一轮任务 → 请求 → 上游尝试，保持 `trace_id` 原有请求含义。
+- [x] `X-Run-ID` / `metadata.run_id` 显式任务归属、同轮并发分支、缺失/歧义/重复会话字段的保守处理。
+- [x] 任务汇总 API、会话内任务筛选、请求任务证据；单次重放创建新 Run 并保留来源。
+- [x] HTTP/WS 实际尝试的独立身份、出站快照、头部与结束计时、取消/失败/切换状态及完整正文下载。
+- [x] v3 元数据与独立尝试文件持久化，兼容 v1/v2；旧任务/时序未知，重启不补发，清理保护幸存者。
+- [x] CPA、New API、Sub2API、vLLM 预设和配置示例；实例接口的未知/支持/不支持声明。
+- [x] 已保存 Provider 的模型发现、临时查询密钥、模型搜索与路由应用；地址变更、跨标签页过期结果和加载/保存竞态处理。
+- [x] Chat JSON/SSE、函数调用/结果、usage/errors、URL、鉴权及别名的受控兼容验收；真实实例联调仍待提供实际服务。
+
+契约：[四层调用](docs/contracts/call-layers.md)、[兼容接入](docs/contracts/compatible-providers.md)。证据：[调用验收](output/playwright/call-layers/verification.md)、[接入验收](output/playwright/compatible-provider-setup/verification.md)。
+
 ## 实际排障流程
 
 - [x] 当前会话请求关键词/状态筛选、耗时排序，手机和短横屏可用；筛选保留选择和完整因果图。

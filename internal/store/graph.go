@@ -13,6 +13,8 @@ type GraphNode struct {
 	Kind         string                `json:"kind"`
 	TraceID      string                `json:"trace_id,omitempty"`
 	SessionID    string                `json:"session_id,omitempty"`
+	RunID        string                `json:"run_id,omitempty"`
+	Run          *RunAssociation       `json:"run,omitempty"`
 	Label        string                `json:"label"`
 	Time         string                `json:"time,omitempty"`
 	Model        string                `json:"model,omitempty"`
@@ -58,6 +60,7 @@ func graphNode(log RequestLog) GraphNode {
 	}
 	node := GraphNode{
 		ID: log.TraceID, Kind: "request", TraceID: log.TraceID, SessionID: log.SessionID,
+		RunID: log.RunID, Run: log.Run,
 		Label: label, Time: log.Time, Model: log.Model, Protocol: log.Protocol,
 		Method: log.Method, Path: log.Path, Status: log.Status, StatusCode: log.StatusCode,
 		Duration: log.Duration, InputTokens: log.InputTokens, OutputTokens: log.OutputTokens,
@@ -71,7 +74,8 @@ func graphNode(log RequestLog) GraphNode {
 	return node
 }
 
-// GraphSnapshot returns false for an unknown (or now-empty, merged) session.
+// GraphSnapshot 投影真实请求关系；任务信息仅作归属元数据，不生成额外因果边。
+// 不存在或合并后已空的会话返回 false。
 func (s *Store) GraphSnapshot(sessionID string) (Graph, bool) {
 	s.RLock()
 	defer s.RUnlock()
@@ -130,7 +134,8 @@ func (s *Store) GraphSnapshot(sessionID string) (Graph, bool) {
 		})
 	}
 	for _, rec := range selected {
-		for _, call := range s.displayLog(rec).Tools {
+		log := s.displayLog(rec)
+		for _, call := range log.Tools {
 			compact := call
 			compact.Input, compact.Output, compact.Error = "", "", ""
 			status := "pending"
@@ -143,7 +148,7 @@ func (s *Store) GraphSnapshot(sessionID string) (Graph, bool) {
 				status = "error"
 			}
 			id := toolNodeID(rec.log.TraceID, call.ID)
-			graph.Nodes = append(graph.Nodes, GraphNode{ID: id, Kind: "tool", TraceID: rec.log.TraceID, SessionID: rec.log.SessionID, Label: call.Name, Status: status, Tool: &compact, TokenSources: protocol.UnknownSources()})
+			graph.Nodes = append(graph.Nodes, GraphNode{ID: id, Kind: "tool", TraceID: rec.log.TraceID, SessionID: rec.log.SessionID, RunID: log.RunID, Run: copyRun(log.Run), Label: call.Name, Status: status, Tool: &compact, TokenSources: protocol.UnknownSources()})
 			graph.Edges = append(graph.Edges, GraphEdge{ID: rec.log.TraceID + ":" + id, Source: rec.log.TraceID, Target: id, Kind: "tool", Confidence: "exact"})
 			if call.ResultTrace != "" && visible[call.ResultTrace] {
 				graph.Edges = append(graph.Edges, GraphEdge{ID: id + ":" + call.ResultTrace, Source: id, Target: call.ResultTrace, Kind: "tool_result", Confidence: "exact"})

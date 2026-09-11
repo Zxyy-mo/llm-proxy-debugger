@@ -15,7 +15,6 @@ import (
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/correlation"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/export"
 	"github.com/Zxyy-mo/llm-proxy-debugger/internal/provider"
-	"github.com/Zxyy-mo/llm-proxy-debugger/internal/store"
 )
 
 func (s *Server) ProvidersHandler(w http.ResponseWriter, r *http.Request) {
@@ -54,18 +53,19 @@ type routeTransport struct {
 	path       string
 	rawPath    string
 	body       []byte
-	info       store.RouteInfo
 	conversion *adapter.Plan
 	upstream   func(*http.Response) *http.Response
 	received   func(time.Time)
-	started    func()
-	capture    func(*http.Request, provider.Provider)
-	update     func(store.RouteInfo)
+	started    func(time.Time)
+	attempt    func(*http.Request, provider.Provider) *upstreamAttempt
 }
 
+// RoundTrip 仅在尚未向客户端输出时切换显式备用上游，每次真正发送都有独立记录。
 func (t routeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	info := t.info
 	for index, endpoint := range t.selection.Endpoints {
+		if err := endpoint.CheckEndpoint(t.path); err != nil {
+			return nil, err
+		}
 		req := request.Clone(request.Context())
 		target, _ := url.Parse(endpoint.BaseURL)
 		path, rawPath := provider.JoinURLPath(target, &url.URL{Path: t.path, RawPath: t.rawPath})
@@ -90,26 +90,34 @@ func (t routeTransport) RoundTrip(request *http.Request) (*http.Response, error)
 		if err := endpoint.Authorize(req.Header); err != nil {
 			return nil, err
 		}
-		t.capture(req, endpoint)
-		if index == 0 {
-			t.started()
+		if err := request.Context().Err(); err != nil {
+			return nil, err
 		}
+		attempt := t.attempt(req, endpoint)
 		start := time.Now()
+		if attempt != nil {
+			start = attempt.started
+		}
+		if index == 0 && t.started != nil {
+			t.started(start)
+		}
 		response, err := t.base.RoundTrip(req)
-		attempt := store.RouteAttempt{ProviderID: endpoint.ID, URL: target.String(), Duration: float64(time.Since(start).Microseconds()) / 1000}
+		headersAt := time.Now()
 		if response != nil {
-			attempt.StatusCode = response.StatusCode
+			attempt.headers(response.StatusCode, headersAt)
 		}
 		if err != nil {
-			attempt.Error = err.Error()
+			attempt.finish("error", err)
 		}
-		info.ProviderID = endpoint.ID
-		info.Attempts = append(info.Attempts, attempt)
-		t.update(info)
 		retry := err != nil || (response != nil && (response.StatusCode == 502 || response.StatusCode == 503 || response.StatusCode == 504))
 		if !retry || index == len(t.selection.Endpoints)-1 || request.Context().Err() != nil {
 			if response != nil && t.received != nil {
-				t.received(time.Now())
+				t.received(headersAt)
+			}
+			if response != nil && response.Body != nil {
+				response.Body = &attemptBody{ReadCloser: response.Body, attempt: attempt}
+			} else if err == nil {
+				attempt.finish("done", nil)
 			}
 			if err == nil && response != nil && t.conversion != nil {
 				if t.upstream != nil {
@@ -121,6 +129,9 @@ func (t routeTransport) RoundTrip(request *http.Request) (*http.Response, error)
 		}
 		if response != nil && response.Body != nil {
 			response.Body.Close()
+		}
+		if err == nil {
+			attempt.finish("abandoned", fmt.Errorf("上游返回 HTTP %d，已切换到下一备用上游", response.StatusCode))
 		}
 	}
 	return nil, fmt.Errorf("no upstream configured")
@@ -134,6 +145,7 @@ func (s *Server) selectProvider(model string) provider.Selection {
 	return selection
 }
 
+// ProviderHistoryHandler 显式读取已保存的 Response，复核实例声明且不制造模型执行记录。
 func (s *Server) ProviderHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -156,6 +168,10 @@ func (s *Server) ProviderHistoryHandler(w http.ResponseWriter, r *http.Request) 
 	p, ok := s.providers.Get(input.ProviderID)
 	if !ok || !p.History {
 		replayJSON(w, 422, map[string]string{"error": "此 Provider 未启用已保存 Responses 查询能力"})
+		return
+	}
+	if err := p.CheckEndpoint("/v1/responses/" + input.ResponseID); err != nil {
+		replayJSON(w, 422, map[string]string{"error": err.Error()})
 		return
 	}
 	target, _ := url.Parse(p.BaseURL)

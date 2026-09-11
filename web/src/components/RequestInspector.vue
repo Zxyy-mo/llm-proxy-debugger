@@ -11,6 +11,7 @@ import ResponseComparison from './ResponseComparison.vue'
 import ToolDetails from './ToolDetails.vue'
 import RoutingDetails from './RoutingDetails.vue'
 import RequestActions from './RequestActions.vue'
+import RunDetails from './RunDetails.vue'
 import type { InvestigationAction } from '@/lib/investigation'
 
 const props = defineProps<{ log: LiveLog | null }>()
@@ -22,7 +23,7 @@ const identifiers = computed(() => {
   if (!log) return []
   const c = log.correlation
   return [
-    ['Trace ID', log.trace_id], ['Session ID', log.session_id],
+    ['Request / Trace ID', log.trace_id], ['Session ID', log.session_id],
     ['Response ID', c?.response_id], ['Previous response', c?.previous_response_id],
     ['Parent trace', c?.parent_trace_id], ['Conversation', c?.conversation_id], ['Thread', c?.thread_id],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]))
@@ -55,6 +56,7 @@ const identifiers = computed(() => {
       </div>
 
       <RequestActions :log="log" @action="intent => emit('action', intent)" />
+      <RunDetails :log="log" />
       <div v-if="log.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
         <div class="mb-1 font-semibold">请求错误</div>
         <p class="break-words leading-relaxed">{{ log.error }}</p>

@@ -1,5 +1,11 @@
 # Panel sizing, scrolling and graph bounds
 
+## 本轮任务与尝试导航
+
+`RunNavigator.vue` 在竖屏让任务选择框独占首行，统计和清除另行；宽度至少 640 且高度不超过 500 时使用横向排列。在有可见侧栏的短横屏（宽度至少 768、高度不超过 500）中，`App.vue` 使用侧栏选择请求，省去重复顶部请求下拉框。任务栏只在画布/详情出现。
+
+`AttemptCapture.vue` 将预览限制为 65,536 字符，提供完整正文下载，选中 Request/Attempt 改变时中止旧读取。新控件须通过 320×568、320×640、390×844、844×390、768×1024、1024×768、1440×900 的真实点击/中心命中；正文视口保留至少 96 px，不能仅凭按钮可点击宣称布局可用。重放正文在 320×640 和 844×390 仍需有可用编辑高度。证据见 [调用分层验收](../../output/playwright/call-layers/verification.md)。
+
 ## Layout contract
 
 - `App.vue` owns a `100dvh` application shell. Flex/split panel ancestors must explicitly allow shrinking with `min-h-0` and `min-w-0`.

@@ -1,5 +1,5 @@
 import type { CallGraph, CurlExport, Interception, InterceptionEdit, InterceptionSummary, ReplayRecord, ReplayRequest, ReplaySource, ReplayValidation, RequestCapture, RequestLog, ResponseSnapshot, Rule, Session, WSEvent } from './types'
-import type { ContextDifference } from './types'
+import type { AttemptDetail, ContextDifference, RunsSnapshot } from './types'
 
 export class APIError extends Error {
   readonly status: number
@@ -45,6 +45,15 @@ export async function fetchGraph(sessionId = '', signal?: AbortSignal): Promise<
   const res = await fetch(`/api/graph?${query}`, { signal, cache: 'no-store' })
   if (!res.ok) throw new Error(res.status === 404 ? '会话已合并，请重新选择会话。' : `加载调用图失败 (${res.status})`)
   return res.json()
+}
+
+export function fetchRuns(sessionId: string, signal?: AbortSignal): Promise<RunsSnapshot> {
+  const query = new URLSearchParams({ session_id: sessionId })
+  return requestJSON(`/api/runs?${query}`, 'GET', undefined, signal)
+}
+
+export function fetchAttempt(trace: string, attempt: string, signal?: AbortSignal): Promise<AttemptDetail> {
+  return requestJSON(`/api/attempts/${encodeURIComponent(trace)}/${encodeURIComponent(attempt)}`, 'GET', undefined, signal)
 }
 
 export async function fetchRules(): Promise<Rule[]> {

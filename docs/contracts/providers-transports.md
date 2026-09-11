@@ -8,6 +8,8 @@ Implemented in M7–M8. Native protocol support, gateway conversion and a provid
 
 `config.providers` entries contain `id`, `name`, `base_url`, `protocol` (`passthrough` or `openai`), optional `key_env` / `auth_header` / `auth_scheme`, and `history` / `websocket` booleans. Up to 64 providers and 256 routes are allowed.
 
+新增可选 `profile` 和 `capabilities`，提供常用接入预设、三态实例声明和显式模型发现。`GET /api/provider-presets`、`POST /api/provider-models` 的字段、错误与失效规则见 [兼容接入契约](compatible-providers.md)。声明为 unknown 的旧/新配置保留透传，unsupported 在实际访问前拒绝；转换后检查实际 Chat 接口。
+
 Base URLs must be HTTP(S) with no userinfo, query or fragment. Origins, mounts and standard `/v1` bases are supported. Joining preserves escaped path segments such as `%2F`; only a literal standard `/v1` prefix is deduplicated. TLS verification is enabled unless the operator explicitly uses `-insecure`.
 
 `key_env` stores an environment-variable **name**, never the key value. When configured, the selected key replaces client authentication headers and credential query parameters are removed. Supported headers are Authorization (default Bearer scheme), X-API-Key and api-key. Empty `key_env` preserves client-supplied authentication. A configured but missing environment variable produces an explicit failure.
@@ -17,6 +19,8 @@ Routes contain `id`, `model`, `provider_id`, optional `target_model`, integer `p
 Fallbacks must exist, be unique and use the same protocol mode. HTTP attempts another configured endpoint only after a transport error or 502/503/504 and before any response has been exposed to the client. No retry follows partial JSON/SSE output. There is no automatic load balancing or WebSocket failover.
 
 Logs expose route ID, selected/actual provider, original/target model, conversion and attempts (provider, status/error, elapsed time). Outgoing captures represent the actual endpoint used. Outgoing replay is pinned to that captured provider/base URL, skips repeated alias/conversion/rules and rejects removed or changed destinations.
+
+每次真正发送现已拥有独立 Attempt ID、出站快照与头部/结束计时；`outgoing` 仍指最后一次尝试。运行、放弃以切换、错误、取消和重启中断均单独表达，详情/下载与旧历史边界见 [四层调用契约](call-layers.md#上游尝试)。
 
 ## Protocol capability matrix
 
@@ -40,6 +44,8 @@ Conversion errors before response output fail explicitly; errors during an SSE c
 Incoming WebSocket upgrades are bridged with Gorilla WebSocket, preserving authentication/subprotocols and verifying upstream TLS. Other WebSocket endpoints are forwarded without fabricated LLM records.
 
 For `/responses`, the first `response.create` selects the provider from its model. The connection is pinned after dialing; a later request that would require another provider/protocol is rejected. The default target is allowed to establish a native connection; configured providers require `websocket:true` and `protocol:passthrough`.
+
+若创建前先发送控制帧，使用 URL 中 `model` 所选目的地并固定该连接；拨号边界同样检查接口声明、WebSocket 开关和原生协议要求。非 create 首帧不能绕过能力限制，也不会为拒绝控制帧制造模型请求记录。
 
 Each valid create becomes a distinct trace with a captured request, actual outgoing payload, model/route, response metrics/tools and `websocket` metadata (`connection_id`, `stream_id`, `event_id`, frame/byte counts). Aliases and outbound policy may apply; HTTP breakpoint editors do not own these frames.
 

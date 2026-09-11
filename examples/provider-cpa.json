@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "id": "personal-cpa",
+      "name": "个人 CPA 实例",
+      "base_url": "https://cpa.example.com/v1",
+      "profile": "cpa",
+      "protocol": "passthrough",
+      "key_env": "CPA_API_KEY",
+      "auth_header": "Authorization",
+      "auth_scheme": "Bearer",
+      "capabilities": {"chat_completions":"unknown","responses":"unknown","messages":"unknown","models":"unknown"},
+      "history": false,
+      "websocket": false
+    }
+  ],
+  "routes": [
+    {"id":"cpa-chat","model":"my-cpa-model","provider_id":"personal-cpa","target_model":"replace-with-actual-model-id","priority":10,"disabled":false,"failover":[]}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "id": "personal-sub2api",
+      "name": "个人 Sub2API 实例",
+      "base_url": "https://sub2api.example.com/v1",
+      "profile": "sub2api",
+      "protocol": "passthrough",
+      "key_env": "SUB2API_API_KEY",
+      "auth_header": "Authorization",
+      "auth_scheme": "Bearer",
+      "capabilities": {"chat_completions":"unknown","responses":"unknown","messages":"unknown","models":"unknown"},
+      "history": false,
+      "websocket": false
+    }
+  ],
+  "routes": [
+    {"id":"sub2api-chat","model":"my-sub2api-model","provider_id":"personal-sub2api","target_model":"replace-with-actual-model-id","priority":10,"disabled":false,"failover":[]}
+  ]
+}

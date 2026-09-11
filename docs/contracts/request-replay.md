@@ -36,6 +36,8 @@ Registered keys remain effective after restart; saved running records become `er
 
 ## Provenance
 
+每个服务器确认的新重放动作还创建独立 Run，`run.state:replay`。原始报文中的旧 Run 证据保持原字节，但不再决定这次执行的观测归属；同一幂等键仍指同一重放任务。任务与逐次出站兼容边界见 [四层契约](call-layers.md)。
+
 The replayed request is a new trace whose log and graph node carry `replay: {id, of, source, modified}`. Provenance is not parent evidence: `correlation` keeps only real identifiers, `previous_response_id`, parent references and history matches. A replay without its own conversation evidence joins the source's session with `session_source: "replay"`; explicit identifiers and parent references keep priority. The graph adds an edge with `kind: "replay"` from the source trace (as a reference node when it lives elsewhere) and the UI draws it dotted and distinct from parent edges. Source records, captures and interception state never change.
 
 ## Required verification

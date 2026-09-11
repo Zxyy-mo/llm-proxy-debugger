@@ -64,6 +64,7 @@ func (s *Store) PrivacyContext(trace string) (privacy.Policy, string) {
 	return privacy.Policy{}, ""
 }
 
+// displayLog 使用请求入站时冻结的命名空间投影日志，包括任务标识及逐次尝试的目的地和错误。
 func (s *Store) displayLog(rec *record) RequestLog {
 	log := copyLog(rec.log)
 	if !rec.privacy.Record {
@@ -73,6 +74,14 @@ func (s *Store) displayLog(rec *record) RequestLog {
 	log.RequestBody = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(log.RequestBody)))
 	log.ResponseBody = string(s.Privacy.JSON(rec.privacy, rec.privacyScope, []byte(log.ResponseBody)))
 	log.Summary, log.ThinkingContent, log.Error = project(log.Summary), project(log.ThinkingContent), project(log.Error)
+	if log.Run != nil {
+		log.Run.ExternalID = project(log.Run.ExternalID)
+	}
+	if log.Route != nil {
+		for i, attempt := range log.Route.Attempts {
+			log.Route.Attempts[i] = s.projectAttempt(rec, attempt)
+		}
+	}
 	for i := range log.Tools {
 		if log.Tools[i].Truncated {
 			log.Tools[i].Input, log.Tools[i].Output = "[工具报文已截断：记录脱敏策略]", ""
@@ -96,9 +105,30 @@ type PrivacyMetadata struct {
 	RawRetained bool `json:"raw_retained"`
 }
 
+// projectSnapshot 投影完整快照后再供展示或落盘；不保留原文时，任务头也不能藏在私有转发资料中。
 func (s *Store) projectSnapshot(snapshot RequestSnapshot, policy privacy.Policy, scope string) RequestSnapshot {
 	if !policy.Record {
 		return snapshot
+	}
+	snapshot = copySnapshot(snapshot)
+	project := func(value string) string {
+		safe := s.Privacy.Text(policy, scope, value)
+		snapshot.Redacted = snapshot.Redacted || safe != value
+		return safe
+	}
+	snapshot.URL = project(snapshot.URL)
+	for name, value := range snapshot.Headers {
+		snapshot.Headers[name] = project(value)
+	}
+	if !policy.RetainRaw && snapshot.Forwarding != nil {
+		// 原始 Run header 会被精确导出所需的多值 headers 保存；新任务字段必须遵守不保留原文策略。
+		for name, values := range snapshot.Forwarding.Headers {
+			if strings.EqualFold(name, "X-Run-ID") {
+				for i, value := range values {
+					snapshot.Forwarding.Headers[name][i] = project(value)
+				}
+			}
+		}
 	}
 	original := snapshot.Body
 	if snapshot.BodyEncoding != "" {

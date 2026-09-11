@@ -2,12 +2,13 @@ import type { RequestLog } from './types'
 
 export type RequestOrder = 'newest' | 'oldest' | 'duration-desc' | 'duration-asc'
 
+// findRequests 组合请求、任务和尝试的可见关键词与状态，仅返回排序副本，不替换调查选择。
 export function findRequests<T extends RequestLog>(logs: T[], query: string, status: string, order: RequestOrder): T[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean)
   const matches = logs.filter(log => {
     const state = log.status ?? (log.error || log.status_code >= 400 ? 'error' : 'done')
     if (status && state !== status) return false
-    const text = [log.trace_id, log.model, log.path, log.summary, log.error, log.correlation?.response_id].filter(Boolean).join(' ').toLocaleLowerCase()
+    const text = [log.trace_id, log.run_id, log.run?.external_id, log.model, log.path, log.summary, log.error, log.correlation?.response_id, ...(log.route?.attempts ?? []).flatMap(attempt => [attempt.id, attempt.provider_id, attempt.error])].filter(Boolean).join(' ').toLocaleLowerCase()
     return terms.every(term => text.includes(term))
   })
   return matches.sort((a, b) => {

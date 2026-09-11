@@ -27,6 +27,8 @@ export interface ResponseSnapshot {
 }
 
 export interface RequestLog {
+  run_id?: string
+  run?: RunAssociation
   route?: RouteInfo
   websocket?: { connection_id: string; stream_id: string; event_id?: string; frames: number; received_bytes: number }
   tools?: ToolCall[]
@@ -100,9 +102,65 @@ export interface Session {
   logs: RequestLog[]
 }
 
+// 任务归属来自网关确认的独立证据，不从会话、时间或请求父子关系推断。
+export interface RunAssociation {
+  state: 'explicit' | 'replay' | 'missing' | 'conflict'
+  external_id?: string
+  sources: string[]
+  warning?: string
+}
+
+export interface RunSummary {
+  id: string
+  external_id?: string
+  sources: string[]
+  session_ids: string[]
+  session_state: 'unknown' | 'known' | 'conflict'
+  trace_ids: string[]
+  request_count: number
+  attempt_count: number
+  active_count: number
+  started_at: string
+  last_at: string
+  partial?: boolean
+}
+
+export interface RunsSnapshot {
+  revision: number
+  runs: RunSummary[]
+  unassociated_trace_ids: string[]
+}
+
+export interface RouteAttempt {
+  id?: string
+  trace_id?: string
+  sequence?: number
+  provider_id?: string
+  url: string
+  request_url?: string
+  transport?: 'http' | 'websocket'
+  source?: 'gateway' | 'legacy_summary'
+  status?: 'running' | 'done' | 'error' | 'canceled' | 'abandoned' | 'interrupted' | 'unknown'
+  status_code?: number
+  started_at?: string
+  headers_at?: string
+  ended_at?: string
+  duration_ms: number
+  total_duration_ms?: number
+  error?: string
+}
+
+export interface AttemptDetail {
+  trace_id: string
+  attempt: RouteAttempt
+  request: RequestSnapshot
+}
+
 export type LiveSession = Omit<Session, 'logs'> & { logs: LiveLog[] }
 
 export interface GraphNode {
+  run_id?: string
+  run?: RunAssociation
   id: string
   kind: 'request' | 'reference' | 'tool'
   tool?: ToolCall
@@ -154,11 +212,18 @@ export interface Rule {
   timeout_action: 'forward' | 'cancel'
 }
 
+export type ProviderProfile = 'custom' | 'cpa' | 'newapi' | 'sub2api' | 'vllm'
+export type ProviderCapabilityState = 'unknown' | 'supported' | 'unsupported'
+export type ProviderCapabilityName = 'chat_completions' | 'responses' | 'messages' | 'models'
+export type ProviderCapabilities = Partial<Record<ProviderCapabilityName, ProviderCapabilityState>>
+
 export interface Provider {
   id: string
   name: string
   base_url: string
   protocol: 'passthrough' | 'openai'
+  profile?: ProviderProfile
+  capabilities?: ProviderCapabilities
   key_env?: string
   auth_header?: string
   auth_scheme?: string
@@ -175,13 +240,44 @@ export interface ProviderRoute {
   failover?: string[]
 }
 export interface ProviderConfig { providers: Provider[]; routes: ProviderRoute[] }
+export interface ProviderPreset {
+  id: ProviderProfile
+  name: string
+  description: string
+  base_url_placeholder: string
+  notes: string[]
+  defaults: Provider
+}
+export interface ProviderPresetsResponse {
+  presets: ProviderPreset[]
+  capability_source: 'operator_declared'
+  gateway: {
+    native_forwarding: string
+    structured_observation: string[]
+    conversion: string
+    history: string
+    websocket: string
+    model_discovery_evidence: string
+  }
+}
+export interface ProviderModel { id: string; owned_by?: string; created?: number }
+export interface ProviderModelsResult {
+  provider_id: string
+  provider: Provider
+  status_code: number
+  models: ProviderModel[]
+  source: 'provider_models'
+  checked_at: string
+  error?: string
+  error_code?: string
+}
 export interface RouteInfo {
   id?: string
   provider_id?: string
   original_model?: string
   target_model?: string
   conversion?: string
-  attempts: { provider_id?: string; url: string; status_code?: number; duration_ms: number; error?: string }[]
+  attempts: RouteAttempt[]
 }
 
 export interface ToolCall {

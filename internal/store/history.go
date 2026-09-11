@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// HistoryHandler 查询或清理已观测历史；Run 筛选与会话筛选独立，读取不会执行历史请求。
 func (s *Store) HistoryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -127,7 +128,14 @@ func (s *Store) HistoryHandler(w http.ResponseWriter, r *http.Request) {
 		if query.Get("session_id") != "" && log.SessionID != query.Get("session_id") {
 			continue
 		}
-		if search != "" && !strings.Contains(strings.ToLower(log.TraceID+" "+log.SessionID+" "+log.Model+" "+log.Path+" "+log.Summary+" "+log.Error+" "+log.Correlation.ResponseID+" "+log.Correlation.PreviousResponseID), search) {
+		if query.Get("run_id") != "" && log.RunID != query.Get("run_id") {
+			continue
+		}
+		runLabel := ""
+		if log.Run != nil {
+			runLabel = log.Run.ExternalID
+		}
+		if search != "" && !strings.Contains(strings.ToLower(log.TraceID+" "+log.SessionID+" "+log.RunID+" "+runLabel+" "+log.Model+" "+log.Path+" "+log.Summary+" "+log.Error+" "+log.Correlation.ResponseID+" "+log.Correlation.PreviousResponseID), search) {
 			continue
 		}
 		if total >= offset && len(items) < limit {
@@ -143,6 +151,8 @@ func (s *Store) HistoryHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"items": items, "total": total, "next_cursor": next, "storage": s.PersistenceStatus()})
 }
 
+// cleanup 跳过活动请求，先持久化元数据删除，再清理没有存活引用的自有正文文件。
+// 所有尝试共享所属请求的隐私命名空间；清理不能影响幸存者或删除重放幂等记录。
 func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 	s.Lock()
 	deleted := map[string]bool{}
@@ -170,6 +180,9 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 		}
 		if rec.upstreamResponse != nil {
 			files = append(files, rec.upstreamResponse.Path)
+		}
+		for _, snapshot := range rec.attemptCaptures {
+			files = append(files, snapshot.FilePath)
 		}
 		delete(s.records, id)
 	}
@@ -225,8 +238,24 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 	// A surviving capture still owns its immutable namespace, even if later
 	// correlation moved it elsewhere or it was loaded from legacy history.
 	keep := map[string]bool{}
+	keepFiles := map[string]bool{}
 	for _, rec := range s.records {
 		keep[rec.privacyScope] = true
+		if rec.capture != nil {
+			keepFiles[rec.capture.Original.FilePath] = true
+			if rec.capture.Outgoing != nil {
+				keepFiles[rec.capture.Outgoing.FilePath] = true
+			}
+		}
+		for _, snapshot := range rec.attemptCaptures {
+			keepFiles[snapshot.FilePath] = true
+		}
+		if rec.response != nil {
+			keepFiles[rec.response.Path] = true
+		}
+		if rec.upstreamResponse != nil {
+			keepFiles[rec.upstreamResponse.Path] = true
+		}
 	}
 	s.Privacy.ForgetScopes(keep)
 	s.revision++
@@ -236,8 +265,10 @@ func (s *Store) cleanup(match func(RequestLog) bool) (int, int, error) {
 		return len(deleted), skipped, err
 	}
 	var failure error
+	removedFiles := make(map[string]bool)
 	for _, path := range files {
-		if s.safeCapturePath(path) {
+		if s.safeCapturePath(path) && !removedFiles[path] && !keepFiles[path] {
+			removedFiles[path] = true
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				failure = err
 			}

@@ -6,6 +6,8 @@ The UI uses existing capture, history, context and replay APIs to support findin
 
 `App.vue` owns the inspected trace separately from `auditSourceTraceId`. `InvestigationAction` is `{trace, action: context|replay|compare|source}`. Context/replay actions explicitly select an audit source. Inspecting a replay result does not silently replace its source editor. One workbench stays mounted; a deliberate source or original/outgoing change resets its draft credential fields. Browser storage contains selection/view identifiers only.
 
+`activeRunId` 增加任务列表筛选，使用服务端 `run_id`，保留当前请求和完整会话图。保存的 `auditTrace:null` 保持“没有打开工作台”的含义，刷新不会偷偷选取当前 Trace 当草稿来源。任务栏只出现在画布/详情，重放工作台保留编辑空间。任务和尝试异步查询、错误恢复及视口验收见 [四层契约](call-layers.md)。
+
 The finder filters the current session by keyword and status, with deterministic newest/oldest/duration ordering. Unknown or unfinished durations sort after known durations. Filtering never removes causal graph data or silently selects another trace. An out-of-filter selection is labelled. Explicit desktop-row/mobile selection sends a graph focus intent; live metrics do not. Subsequent manual camera movement and Show All keep their own modes.
 
 Single-trace navigation uses `GET /api/history/{trace}` when needed and respects local revisions. Missing or failed reads are explicit rather than falling back to an unrelated latest call. History keeps its applied query/status/cursor and exposes a return action. Hidden views abort irrelevant loads without discarding the active investigation.

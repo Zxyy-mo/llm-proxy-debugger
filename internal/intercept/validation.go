@@ -69,8 +69,9 @@ func Validate(path, original, body string, headers map[string]string) error {
 	}
 	before := correlation.ExtractRequest(nil, path, []byte(original), "")
 	after := correlation.ExtractRequest(nil, path, []byte(body), "")
-	if !slices.Equal(before.Identities, after.Identities) || before.ParentTraceID != after.ParentTraceID || before.PreviousResponseID != after.PreviousResponseID {
-		return fmt.Errorf("session, conversation, thread and parent identifiers cannot be changed on a captured request")
+	// Run 属于初始任务证据，编辑正文不能把已捕获请求迁移到另一轮任务。
+	if !slices.Equal(before.Identities, after.Identities) || before.ParentTraceID != after.ParentTraceID || before.PreviousResponseID != after.PreviousResponseID || !before.Run.Equal(after.Run) {
+		return fmt.Errorf("session, conversation, thread, run and parent identifiers cannot be changed on a captured request")
 	}
 	path = strings.TrimSuffix(path, "/")
 	if !strings.HasSuffix(path, "/messages") && !strings.HasSuffix(path, "/chat/completions") && !strings.HasSuffix(path, "/responses") {

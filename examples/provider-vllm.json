@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "id": "local-vllm",
+      "name": "本地 vLLM",
+      "base_url": "http://127.0.0.1:8000/v1",
+      "profile": "vllm",
+      "protocol": "passthrough",
+      "key_env": "VLLM_API_KEY",
+      "auth_header": "Authorization",
+      "auth_scheme": "Bearer",
+      "capabilities": {"chat_completions":"unknown","responses":"unknown","messages":"unknown","models":"unknown"},
+      "history": false,
+      "websocket": false
+    }
+  ],
+  "routes": [
+    {"id":"vllm-chat","model":"my-local-model","provider_id":"local-vllm","target_model":"replace-with-actual-model-id","priority":10,"disabled":false,"failover":[]}
+  ]
+}

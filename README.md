@@ -2,10 +2,13 @@
 
 面向个人开发者的 LLM 调试网关：捕获真实请求与响应，查看会话、上下文、工具与耗时，在 HTTP 请求发出前编辑，或从已捕获快照重放一次模型请求。
 
-当前开发分支是 **`feat/agent-debugger-workflow`**。已打通请求定位、上下文检查、修改重放和结果评估流程；入门见 [排障使用指南](docs/USAGE.md)，功能、支持边界和验收见 [清单](FEATURE_CHECKLIST.md)、[路线](IMPLEMENTATION_ROADMAP.md)、[最新验收](output/playwright/agent-debug-loop/verification.md)。
+当前开发分支是 **`feat/agent-debugger-workflow`**。已打通请求定位、上下文检查、修改重放和结果评估，并支持四层调用模型与常用兼容上游接入。入门见 [排障使用指南](docs/USAGE.md)，功能和边界见 [清单](FEATURE_CHECKLIST.md)、[路线](IMPLEMENTATION_ROADMAP.md)。最新验收：[调用分层](output/playwright/call-layers/verification.md)、[兼容接入](output/playwright/compatible-provider-setup/verification.md)。
 
 ## 现在可以做什么
 
+- **按任务排障**：会话 → 一轮任务 → 模型请求 → 上游尝试；显式 Run 标识支持同轮并发和分支，缺失或冲突保持未关联，重放创建独立任务。
+- **逐次上游记录**：每次实际发送有独立 ID、出站快照、响应头与结束耗时；可分别查看/下载故障切换前后的出站内容。
+- **兼容接入**：CPA、New API、Sub2API、vLLM 配置预设，实例能力三态声明，显式查询模型列表并应用到路由；未知能力和未实测实例均保留说明。
 - **请求定位**：关键词/状态筛选、耗时排序、可读的节点聚焦，以及上下文、重放和返回来源的直接入口。
 - **完整报文**：原始/出站请求、JSON/SSE 响应按文件保存，支持分段浏览、直达末段、完整下载和 gzip 标记；转换前后响应分开查看。
 - **可信指标**：每个 Token 计数标注 Provider usage、字符估算或未知；首响应头、首有效内容从实际出站计时，排除断点等待。
@@ -53,6 +56,8 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 
 父调用证据按 `X-Parent-Trace-ID` / `metadata.parent_trace_id`、`previous_response_id`、唯一完整历史前缀匹配依次处理。共享会话、时间相近或共享系统提示都不构成父子关系。HTTP 响应附带 `X-Gateway-Trace-ID`。
 
+在同一轮的模型请求中传入相同的 `X-Run-ID` 或 `metadata.run_id`，下一轮使用新值。界面可按任务筛选；现有 `trace_id` 仍表示一次请求。新 Run 身份由明确会话和上游/客户端身份作用域隔离，跨作用域不自动合并。已关联请求还返回内部 `X-Gateway-Run-ID`；完整示例及冲突处理见 [四层契约](docs/contracts/call-layers.md)。
+
 图中有模型请求、工具节点及缺失父调用引用。实线代表明确 ID，虚线代表历史推断，重放来源单独标注。响应查询不冒充响应生成者；未知远端历史明确显示缺口。只展示 API 明确返回的 reasoning/thinking。
 
 ## 主要 API
@@ -63,6 +68,8 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 | --- | --- |
 | `GET /api/sessions` | 会话和有界日志快照 |
 | `GET /api/graph?session_id=…` | 全部或指定会话的节点/边 |
+| `GET /api/runs?session_id=…` | 任务分组、请求/尝试数量和未关联请求 |
+| `GET /api/attempts/{trace}`、`/{attempt}`、`/{attempt}/body` | 逐次发送结果、独立出站详情与正文下载 |
 | `/api/ws` | 界面实时事件；与上游 LLM WebSocket 分开 |
 | `GET/POST /api/rules`，`PUT/DELETE /api/rules/{id}` | 注入和断点规则 |
 | `GET /api/interceptions`，`GET/PATCH /api/interceptions/{trace}` | 等待队列和编辑草稿 |
@@ -77,6 +84,7 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 | `POST /api/history/cleanup` | 按会话/时间清理；跳过活动请求 |
 | `POST /api/tool-spans` | 外部执行记录上报 |
 | `GET/PUT /api/providers` | Provider、模型路由和能力配置 |
+| `GET /api/provider-presets`、`POST /api/provider-models` | 兼容接入预设、已保存 Provider 的模型列表查询 |
 | `POST /api/provider-history` | 按 ID 读取 Provider 保存的 Response |
 
 详细字段、错误码及行为见 [接口契约目录](docs/README.md)。
@@ -85,6 +93,7 @@ Provider 配置只保存密钥**环境变量名**，不保存密钥值。先在�
 
 - 默认开启 SQLite 持久化，普通元数据约每 200 ms 合并写入，正常退出刷新；异常中止可能丢失最近普通状态。新重放先同步保存登记与幂等键，再执行；保存失败不会发送上游请求。恢复中的活动请求标记中断，不会自动补发。
 - SQLite 当前保存一份合并 JSON 元数据快照，历史筛选使用内存索引，正文另存文件。适用于个人调试；尚未实现按表增量存储和大规模分页数据库查询。
+- 元数据写 v3、兼容读取 v1/v2/v3。旧记录没有的任务边界和完整尝试计时保持未知；回退到旧程序需要旧版数据库及正文备份。
 - `-data -` 仅关闭元数据持久化，仍可生成报文文件。备份/迁移需要同时保留数据库和捕获目录；本版本记录绝对文件路径，迁移后应保持可解析的捕获路径。
 - JSON 响应处理及流式文本累积仍会使用内存。列表/广播采用有界预览；完整文件不是零内存转发保证。
 - 单个 SSE 事件超过 2 MiB 时停止解析并显示 `observation_warning`；原生转发与原始捕获继续。部分指标显示未知，脱敏输出投影标注不完整。
@@ -102,6 +111,6 @@ npm --prefix web test
 npm --prefix web run build
 ```
 
-本轮通过全量 Go race/vet、46 项前端辅助测试、生产构建，以及基于 70 次合成 Agent 调用的实际浏览器排障流程、丢响应恢复、取消、历史返回和七种视口检查。完整响应、会话隔离与持久化另有 [专项验收](output/playwright/foundation-refinement/verification.md)。
+本轮新增 Run、独立 Attempt、旧历史迁移和兼容接口的行为覆盖，完成全量 Go race/vet、53 项前端测试、生产构建、实际浏览器流程与七种视口检查。记录见 [四层模型验收](output/playwright/call-layers/verification.md) 和 [兼容接入验收](output/playwright/compatible-provider-setup/verification.md)。
 
-证据、脚本和截图见 [排障流程验收](output/playwright/agent-debug-loop/verification.md)。此前真实 `glm-5.3-flash` 的 JSON/SSE 结果保留在 [foundation 历史验收](output/playwright/foundation/verification.md)；本轮使用本地 mock，不据此扩展真实 Provider 的能力声明。开发入口见 [HANDOFF.md](HANDOFF.md)。
+此前的 70 次合成调用与重放恢复见 [排障流程验收](output/playwright/agent-debug-loop/verification.md)，真实 `glm-5.3-flash` 的 JSON/SSE 结果见 [foundation 历史验收](output/playwright/foundation/verification.md)。本轮四类兼容服务使用本地受控测试，尚未取得对应真实实例的联调证据。开发入口见 [HANDOFF.md](HANDOFF.md)。

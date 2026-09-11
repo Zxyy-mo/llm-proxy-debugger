@@ -1,0 +1,526 @@
+{
+  "date": "2026-09-11",
+  "source": "controlled_models_service_and_browser",
+  "layout": {
+    "checked": 42,
+    "all_reachable": true,
+    "page_horizontal_overflow": false,
+    "checks": [
+      {
+        "viewport": "1600×1000",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 1358.2890625,
+          "y": 324,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1600×1000",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 650.34765625,
+          "y": 455.5,
+          "width": 593.1015625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1600×1000",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 423.125,
+          "y": 455.75,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1600×1000",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 412.796875,
+          "y": 656.25,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1600×1000",
+        "name": "发现的模型",
+        "hit": {
+          "x": 952.8984375,
+          "y": 455.75,
+          "width": 1198.203125,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1600×1000",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 1017.8984375,
+          "y": 627.75,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1366×768",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 1124.2890625,
+          "y": 324,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1366×768",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 556.75,
+          "y": 363,
+          "width": 499.5,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1366×768",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 376.328125,
+          "y": 362.75,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1366×768",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 366,
+          "y": 563.25,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1366×768",
+        "name": "发现的模型",
+        "hit": {
+          "x": 812.5,
+          "y": 362.75,
+          "width": 1011,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1366×768",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 877.5,
+          "y": 534.75,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1024×768",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 782.2890625,
+          "y": 324,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1024×768",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 419.94921875,
+          "y": 363,
+          "width": 362.6953125,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1024×768",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 307.9296875,
+          "y": 363,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1024×768",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 297.6015625,
+          "y": 583,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1024×768",
+        "name": "发现的模型",
+        "hit": {
+          "x": 607.30078125,
+          "y": 363,
+          "width": 737.3984375,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "1024×768",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 672.296875,
+          "y": 535,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "768×600",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 526.2890625,
+          "y": 295.5,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "768×600",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 317.546875,
+          "y": 295.875,
+          "width": 260.296875,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "768×600",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 256.7265625,
+          "y": 295.875,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "768×600",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 246.3984375,
+          "y": 295.875,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "768×600",
+        "name": "发现的模型",
+        "hit": {
+          "x": 453.69921875,
+          "y": 427.375,
+          "width": 532.6015625,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "768×600",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 518.6953125,
+          "y": 295.875,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "390×844",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 109,
+          "y": 411.5,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "390×844",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 187.5,
+          "y": 411.5,
+          "width": 325,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "390×844",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 94.328125,
+          "y": 411.25,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "390×844",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 84,
+          "y": 411.25,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "390×844",
+        "name": "发现的模型",
+        "hit": {
+          "x": 187.5,
+          "y": 622.75,
+          "width": 325,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "390×844",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 84,
+          "y": 411.25,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "320×640",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 109,
+          "y": 342.5,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "320×640",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 152.5,
+          "y": 342.375,
+          "width": 255,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "320×640",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 94.328125,
+          "y": 342.375,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "320×640",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 84,
+          "y": 342.375,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "320×640",
+        "name": "发现的模型",
+        "hit": {
+          "x": 152.5,
+          "y": 463.375,
+          "width": 255,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "320×640",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 84,
+          "y": 342.375,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "844×390",
+        "name": "新增接入类型",
+        "hit": {
+          "x": 602.2890625,
+          "y": 211.5,
+          "width": 194,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "844×390",
+        "name": "Chat Completions 能力声明",
+        "hit": {
+          "x": 347.94921875,
+          "y": 211.875,
+          "width": 290.6953125,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "844×390",
+        "name": "保存 Provider 与路由",
+        "hit": {
+          "x": 271.9296875,
+          "y": 211.875,
+          "width": 164.65625,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "844×390",
+        "name": "查询模型列表",
+        "hit": {
+          "x": 261.6015625,
+          "y": 211.875,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "844×390",
+        "name": "发现的模型",
+        "hit": {
+          "x": 499.30078125,
+          "y": 211.875,
+          "width": 593.3984375,
+          "height": 128,
+          "reachable": true
+        }
+      },
+      {
+        "viewport": "844×390",
+        "name": "填入所选路由",
+        "hit": {
+          "x": 564.296875,
+          "y": 211.875,
+          "width": 118,
+          "height": 36,
+          "reachable": true
+        }
+      }
+    ]
+  },
+  "config_race": {
+    "passed": 12,
+    "checks": [
+      {
+        "name": "外部配置修改成功-race-read",
+        "passed": true
+      },
+      {
+        "name": "旧 GET 未返回时禁止编辑地址",
+        "passed": true
+      },
+      {
+        "name": "旧 GET 未返回时禁止保存",
+        "passed": true
+      },
+      {
+        "name": "旧 GET 未返回时显示加载状态",
+        "passed": true
+      },
+      {
+        "name": "保存 handler 拒绝读取期间的程序化 submit",
+        "passed": true
+      },
+      {
+        "name": "GET 结束后恢复编辑",
+        "passed": true
+      },
+      {
+        "name": "外部配置修改成功-race-save",
+        "passed": true
+      },
+      {
+        "name": "PUT 尚未确认时禁止重新加载",
+        "passed": true
+      },
+      {
+        "name": "PUT 尚未确认时禁止草稿编辑",
+        "passed": true
+      },
+      {
+        "name": "load handler 拒绝保存期间的程序化 click",
+        "passed": true
+      },
+      {
+        "name": "保存后服务端保留新路由",
+        "passed": true
+      },
+      {
+        "name": "保存后界面与服务端一致",
+        "passed": true
+      }
+    ]
+  }
+}

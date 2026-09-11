@@ -31,7 +31,9 @@ func (s *Store) touch(rec *record) {
 	s.changed()
 }
 
+// copyLog 深拷贝可变元数据，发布事件或读取快照不能改写权威日志中的任务和尝试结果。
 func copyLog(log RequestLog) RequestLog {
+	log.Run = copyRun(log.Run)
 	if log.WebSocket != nil {
 		info := *log.WebSocket
 		log.WebSocket = &info
@@ -62,14 +64,14 @@ func copyLog(log RequestLog) RequestLog {
 	}
 	if log.Route != nil {
 		route := *log.Route
-		route.Attempts = append([]RouteAttempt(nil), route.Attempts...)
+		route.Attempts = copyAttempts(route.Attempts)
 		log.Route = &route
 	}
 	return log
 }
 
-// UpdateInput reindexes history after rule or editor changes. Identity and
-// explicit references are validated as immutable at the editing boundary.
+// UpdateInput 在规则或编辑后重建历史关联；任务归属始终保留入站证据。
+// 显式会话和父引用仍由编辑边界校验，不能通过内容编辑重写任务身份。
 func (s *Store) UpdateInput(traceID string, input correlation.Request) RequestLog {
 	s.Lock()
 	defer s.Unlock()
@@ -78,6 +80,7 @@ func (s *Store) UpdateInput(traceID string, input correlation.Request) RequestLo
 		return RequestLog{}
 	}
 	changed := rec.input.ContextHash != input.ContextHash || !slices.Equal(rec.input.Messages, input.Messages)
+	input.Run = rec.input.Run
 	rec.input = input
 	rec.privacyHistory = nil
 	if session := s.sessions[rec.log.SessionID]; session.Label == rec.log.Summary {
@@ -108,10 +111,8 @@ func (s *Store) UpdateInput(traceID string, input correlation.Request) RequestLo
 	return s.displayLog(rec)
 }
 
-// UpdateOutboundInput indexes the privacy-substituted transcript without
-// treating substitution itself as new conversation evidence. Keep only the
-// bounded pre-substitution fingerprints so a client resubmitting its original
-// prompt plus the actual assistant reply can match the same conversation.
+// UpdateOutboundInput 索引脱敏后的出站上下文，同时保留入站会话、任务与父引用证据。
+// 额外保存有界的替换前哈希，让客户端原始历史能够匹配真实输出；不保存另一份明文上下文。
 func (s *Store) UpdateOutboundInput(traceID string, input correlation.Request) RequestLog {
 	s.Lock()
 	defer s.Unlock()
@@ -136,6 +137,8 @@ func (s *Store) UpdateOutboundInput(traceID string, input correlation.Request) R
 	// alias ownership and later correlation while indexing outgoing messages.
 	input.Identities = slices.Clone(before.Identities)
 	input.ParentTraceID, input.PreviousResponseID = before.ParentTraceID, before.PreviousResponseID
+	// 出站脱敏可能改写 metadata.run_id，但任务身份只取初始明确证据。
+	input.Run = before.Run
 	rec.input = input
 	if session := s.sessions[rec.log.SessionID]; session.Label == rec.log.Summary {
 		session.Label = input.Summary
@@ -158,6 +161,7 @@ func (s *Store) BeginWithBody(log RequestLog, input correlation.Request, body []
 	return s.begin(log, input, &requestPreview{body: body, limit: limit}, frozen)
 }
 
+// begin 在同一锁内完成首次关联、冻结任务和隐私命名空间，再公开安全的初始日志。
 func (s *Store) begin(log RequestLog, input correlation.Request, preview *requestPreview, frozen []privacy.Policy) RequestLog {
 	s.Lock()
 	defer s.Unlock()
@@ -217,6 +221,7 @@ func (s *Store) begin(log RequestLog, input correlation.Request, preview *reques
 		log.Correlation.Warning = "history_limit"
 	}
 	s.sequence++
+	input.Run.Sources = slices.Clone(input.Run.Sources)
 	rec := &record{
 		log: copyLog(log), input: input, sequence: s.sequence, privacy: s.Privacy.Policy(),
 		fixedSession: len(input.Identities) > 0, preferredSession: log.SessionID,
@@ -252,6 +257,7 @@ func (s *Store) begin(log RequestLog, input correlation.Request, preview *reques
 	key := referenceKey(input.Scope, "trace", log.TraceID)
 	addIndex(s.owners, key, log.TraceID)
 	s.resolveWaiters(key)
+	s.assignRun(rec)
 	rec.privacyScope = s.admissionPrivacyScope(rec)
 	if preview != nil {
 		s.setInitialPreview(rec, *preview)
@@ -261,6 +267,8 @@ func (s *Store) begin(log RequestLog, input correlation.Request, preview *reques
 		rec.input.Summary = rec.log.Summary
 		if !rec.privacy.RetainRaw {
 			rec.log = s.displayLog(rec)
+			// Run 索引已经是哈希；不保留原文时不能在私有入站证据里另留一份外部 ID。
+			rec.input.Run.Value = s.Privacy.Text(rec.privacy, rec.privacyScope, rec.input.Run.Value)
 		}
 	}
 	if summaryLabel {
@@ -488,8 +496,8 @@ func (s *Store) observeResponse(rec *record, response correlation.Response) {
 	}
 }
 
-// Complete replaces the running log while preserving the current authoritative
-// session/link metadata, which may have changed since Begin returned.
+// Complete 写入最终请求结果，同时保留运行期间更新的会话、任务、工具和逐次尝试。
+// 不能用 Begin 返回的旧日志覆盖晚到关联或已经结束的上游尝试。
 func (s *Store) Complete(traceID string, log RequestLog, response correlation.Response) RequestLog {
 	s.Lock()
 	defer s.Unlock()
@@ -498,6 +506,7 @@ func (s *Store) Complete(traceID string, log RequestLog, response correlation.Re
 		return log
 	}
 	log.TraceID, log.SessionID, log.Correlation = rec.log.TraceID, rec.log.SessionID, rec.log.Correlation
+	log.RunID, log.Run = rec.log.RunID, rec.log.Run
 	log.Model, log.Protocol, log.Summary = rec.log.Model, rec.log.Protocol, rec.log.Summary
 	log.Interception, log.WaitDuration = rec.log.Interception, rec.log.WaitDuration
 	log.Replay = rec.log.Replay

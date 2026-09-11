@@ -34,6 +34,7 @@ type Identity struct {
 // Request holds indexing material. Scope and message hashes are never exposed
 // through the log or graph API, and no raw credentials are retained here.
 type Request struct {
+	Run                RunEvidence
 	Scope              string
 	Protocol           string
 	Model              string
@@ -69,6 +70,8 @@ func Protocol(path string) string {
 	return "anthropic"
 }
 
+// ExtractRequest 提取协议可见的会话、任务和父引用证据；Scope 仅保存上游与凭证的哈希。
+// Run 独立于会话身份和历史匹配，缺失或冲突时不能从其他关系补猜任务边界。
 func ExtractRequest(h http.Header, path string, body []byte, upstream string) Request {
 	r := Request{
 		Scope:    Hash(upstream, h.Get("Authorization"), h.Get("X-API-Key")),
@@ -116,6 +119,10 @@ func ExtractRequest(h http.Header, path string, body []byte, upstream string) Re
 		} else if parts[i] == "conversations" {
 			add("conversation", parts[i+1], "path:conversation_id")
 		}
+	}
+	r.Run = extractRun(h, root)
+	if r.Run.Warning == "" && r.Run.Value != "" && conflictingSessionEvidence(h, root, r.Identities) {
+		r.Run.Warning = "conflicting_session_identifier"
 	}
 
 	input := root.Get("messages")

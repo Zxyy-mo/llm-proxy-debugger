@@ -489,15 +489,15 @@ func TestLegacyPrivacyRestoresWithoutBroadeningNewCaptures(t *testing.T) {
 		t.Fatal(err)
 	}
 	var upgraded diskState
-	if json.Unmarshal(updated, &upgraded) != nil || upgraded.Version != 2 {
-		t.Fatal("new snapshots did not migrate to version 2")
+	if json.Unmarshal(updated, &upgraded) != nil || upgraded.Version != 3 {
+		t.Fatal("new snapshots did not migrate to version 3")
 	}
 	reopened := New()
 	if err = reopened.restore(updated); err != nil {
 		t.Fatal(err)
 	}
 	if restoredText(t, reopened, "old-two", token) != "legacy@example.com" {
-		t.Fatal("version 2 rewrite changed the legacy dictionary")
+		t.Fatal("version 3 rewrite changed the legacy dictionary")
 	}
 	_, originalScope := s.PrivacyContext(fresh.TraceID)
 	_, restoredScope := reopened.PrivacyContext(fresh.TraceID)
@@ -507,6 +507,6 @@ func TestLegacyPrivacyRestoresWithoutBroadeningNewCaptures(t *testing.T) {
 	upgraded.Records[0].PrivacyScope = ""
 	invalid, _ := json.Marshal(upgraded)
 	if New().restore(invalid) == nil {
-		t.Fatal("version 2 accepted a missing namespace")
+		t.Fatal("version 3 accepted a missing namespace")
 	}
 }

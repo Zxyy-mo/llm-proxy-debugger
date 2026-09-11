@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "id": "personal-newapi",
+      "name": "个人 New API 实例",
+      "base_url": "https://newapi.example.com/v1",
+      "profile": "newapi",
+      "protocol": "passthrough",
+      "key_env": "NEWAPI_API_KEY",
+      "auth_header": "Authorization",
+      "auth_scheme": "Bearer",
+      "capabilities": {"chat_completions":"unknown","responses":"unknown","messages":"unknown","models":"unknown"},
+      "history": false,
+      "websocket": false
+    }
+  ],
+  "routes": [
+    {"id":"newapi-chat","model":"my-newapi-model","provider_id":"personal-newapi","target_model":"replace-with-actual-model-id","priority":10,"disabled":false,"failover":[]}
+  ]
+}

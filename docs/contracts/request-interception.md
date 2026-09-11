@@ -31,6 +31,8 @@ Compressed or non-UTF-8 requests expose `edit_blocked_reason` and `body_encoding
 
 Session/conversation/thread identifiers and explicit parent references are immutable while editing one captured request. This keeps recorded identity and parent references stable. Message/context edits recompute inferred history edges and the final transcript index from the effective outgoing body; never index original text paired with a modified response.
 
+`metadata.run_id` 的有效值、非法值及重复/冲突证据同样不可编辑；`X-Run-ID` 不属于允许编辑的头。任务归属固定于入站，具体规则见 [四层调用契约](call-layers.md)。
+
 ## Capture and event contract
 
 `GET /api/requests/{trace_id}` returns `{trace_id, original, outgoing?}`. Each snapshot has `method`, `url`, `headers`, `body`, and `content_length`; complete bodies are independent of `-maxbody`. `outgoing` is recorded at the proxy transport boundary and is absent for requests never forwarded. Captured headers use the existing redacted allowlist plus the editable headers. Raw credentials stay on the original HTTP request and never enter these API payloads.

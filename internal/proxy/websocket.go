@@ -35,6 +35,7 @@ type wsCall struct {
 	started, sent, first time.Time
 	info                 store.WebSocketInfo
 	cancelRequested      bool
+	attempt              *upstreamAttempt
 }
 
 func readWS(ctx context.Context, conn *websocket.Conn, events chan<- wsMessage) {
@@ -65,6 +66,16 @@ func wsCloseMessage(err error, fallback string) []byte {
 }
 
 func (s *Server) dialWebSocket(ctx context.Context, r *http.Request, endpoint provider.Provider, subprotocols []string) (*websocket.Conn, *url.URL, error) {
+	// 首帧不一定是 response.create；统一在拨号边界检查，防止取消/控制帧绕过能力声明。
+	if err := endpoint.CheckEndpoint(r.URL.Path); err != nil {
+		return nil, nil, err
+	}
+	if endpoint.ID != "" && !endpoint.WebSocket {
+		return nil, nil, fmt.Errorf("Provider %s 未启用 WebSocket 能力", endpoint.ID)
+	}
+	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/responses") && endpoint.Protocol != "passthrough" {
+		return nil, nil, fmt.Errorf("Responses WebSocket 需要原生透传 Provider")
+	}
 	target, err := url.Parse(endpoint.BaseURL)
 	if err != nil {
 		return nil, nil, err
@@ -170,6 +181,7 @@ func (s *Server) wsFrame(call *wsCall, body []byte) {
 	s.hub.Publish(map[string]any{"event": "sse_delta", "trace_id": call.trace, "data": data, "metrics": metrics})
 }
 
+// finishWSCall 按模型终止事件或真实断连原因收敛请求和尝试；握手失败没有已发送模型帧。
 func (s *Server) finishWSCall(call *wsCall, status int, failure error) {
 	recorder := call.recorder
 	response := recorder.capture.Response()
@@ -214,12 +226,20 @@ func (s *Server) finishWSCall(call *wsCall, status int, failure error) {
 	if failure != nil {
 		log.Error = failure.Error()
 	}
+	if status == 499 {
+		call.attempt.finish("canceled", failure)
+	} else if failure != nil {
+		call.attempt.finish("error", failure)
+	} else {
+		call.attempt.finish("done", nil)
+	}
 	log = s.store.Complete(call.trace, log, response)
 	s.hub.Publish(map[string]any{"event": "request_end", "trace_id": call.trace, "log": log})
 	s.hub.Publish(map[string]any{"event": "sessions_updated"})
 	s.asyncLog(log)
 }
 
+// handleWebSocket 固定连接上游，在各 lane 内关联可见帧；连接本身不证明会话、任务或因果关系。
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.closeMu.Lock()
 	if s.closed {
@@ -244,6 +264,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		pinned = selection.Endpoints[0]
 		if pinned.ID != "" && !pinned.WebSocket {
 			http.Error(w, "Provider WebSocket capability is disabled", 422)
+			return
+		}
+		if err := pinned.CheckEndpoint(r.URL.Path); err != nil {
+			http.Error(w, err.Error(), 422)
 			return
 		}
 		var err error
@@ -281,14 +305,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	endStatus := 502
 	endReason := "WebSocket upstream closed before response completion"
 	defer func() {
-		cancel()
-		if upstream != nil {
-			upstream.Close()
-		}
+		// 先按真实退出原因记录终态，再取消内部读循环；清理不能把上游断连误记为用户取消。
 		for _, queue := range lanes {
 			for _, call := range queue {
 				s.finishWSCall(call, endStatus, fmt.Errorf("%s", endReason))
 			}
+		}
+		cancel()
+		if upstream != nil {
+			upstream.Close()
 		}
 	}()
 	reject := func(call *wsCall, status int, message string) error {
@@ -337,6 +362,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					failure = "at most 32 named streams are supported per connection"
 				} else if endpoint.Protocol != "passthrough" || (endpoint.ID != "" && !endpoint.WebSocket) {
 					failure = "WebSocket requests need a passthrough Provider with WebSocket enabled"
+				} else if err := endpoint.CheckEndpoint(r.URL.Path); err != nil {
+					failure = err.Error()
 				} else if upstream != nil && (pinned.ID != endpoint.ID || pinned.BaseURL != endpoint.BaseURL || pinned.KeyEnv != endpoint.KeyEnv) {
 					failure = "this WebSocket is pinned to its first Provider; open another connection for a different route"
 				}
@@ -385,6 +412,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					if call != nil {
 						_ = reject(call, 502, err.Error())
+					} else {
+						// 控制帧被拒绝时仍返回明确原因，不虚构一条模型请求来承载错误。
+						raw, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "gateway_error", "message": err.Error()}})
+						_ = writeWS(client, websocket.TextMessage, raw)
 					}
 					return
 				}
@@ -405,12 +436,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				out.Method = "WS"
 				out.ContentLength = int64(len(body))
 				_ = pinned.Authorize(out.Header)
-				snapshot := snapshotRequest(out, body)
-				snapshot.Forwarding.ProviderID, snapshot.Forwarding.BaseURL = pinned.ID, pinned.BaseURL
-				s.store.CaptureOutgoing(call.trace, snapshot)
+				// 只有即将写出的 response.create 才拥有模型 Attempt；握手失败保持未发送。
+				call.attempt = s.beginUpstreamAttempt(call.trace, out, pinned, body, "websocket")
 				call.sent = time.Now()
+				if call.attempt != nil {
+					call.sent = call.attempt.started
+				}
 				call.recorder.upstreamAt = call.sent
-				s.store.SetRoute(call.trace, store.RouteInfo{ID: selection.RouteID, ProviderID: pinned.ID, OriginalModel: call.initial.Model, TargetModel: selection.Model, Attempts: []store.RouteAttempt{{ProviderID: pinned.ID, URL: pinned.BaseURL, StatusCode: 101}}})
 				lanes[call.lane] = append(lanes[call.lane], call)
 				if call.lane != "" {
 					seenLanes[call.lane] = true
@@ -426,6 +458,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if err := writeWS(upstream, message.kind, body); err != nil {
 				endReason = "WebSocket upstream write failed"
 				return
+			}
+			if call != nil {
+				call.attempt.websocketSent()
 			}
 		case message := <-upstreamEvents:
 			if message.err != nil {

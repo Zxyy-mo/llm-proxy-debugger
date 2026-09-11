@@ -6,10 +6,14 @@ import (
 	"strings"
 )
 
+// SetCaptureRoot 规范化已存在目录的符号链接，避免 macOS 临时目录的 /var 别名使新文件被误判为目录外。
 func (s *Store) SetCaptureRoot(root string) error {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 	s.captureRoot = abs
 	return nil

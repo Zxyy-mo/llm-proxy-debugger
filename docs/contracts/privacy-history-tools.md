@@ -27,7 +27,7 @@ Policy is captured when a request begins. Textual projection precedes preview tr
 
 New captures use a keyed hash of their **admission-time conversation plus upstream/client credential identity**, pattern name and matched value. The same value stays consistent in already-associated calls within that conversation; unrelated conversations sharing credentials receive different placeholders. Scope allocation and full-body projection happen atomically after initial correlation and before preview truncation. Existing placeholders are protected from further regex rewriting. No raw authentication key is stored to produce these hashes.
 
-Each capture keeps its privacy namespace for its lifetime. Later graph merges, detaches or response identifiers do not rewrite already-forwarded bytes or grant another namespace's reveal authority. Previously unrelated captures that are linked later can therefore retain different historical placeholders. Same-identity replay may retain its source's modern namespace when no explicit different conversation takes precedence. Older version 1 captures keep their legacy namespace for restoration; fresh captures never inherit that credential-wide namespace. Snapshot version 2 persists the frozen namespace and still reads version 1 data.
+Each capture keeps its privacy namespace for its lifetime. Later graph merges, detaches or response identifiers do not rewrite already-forwarded bytes or grant another namespace's reveal authority. Previously unrelated captures that are linked later can therefore retain different historical placeholders. Same-identity replay may retain its source's modern namespace when no explicit different conversation takes precedence. Older version 1 captures keep their legacy namespace for restoration; fresh captures never inherit that credential-wide namespace. Version 2 introduced the frozen namespace; the current snapshot writes version 3 and reads versions 1, 2 and 3.
 
 `POST /api/privacy/restore` accepts `{trace_id, body}`. It requires the trace's original-retention policy and the current reveal opt-in, and restores only available mappings in that trace's scope. Missing trace: 404; unretained originals: 409; reveal disabled: 403. The API returns text for operator inspection; it does not send another model request.
 
@@ -41,6 +41,8 @@ Policy updates apply to new captures; they do not retroactively erase previously
 
 Persisted metadata includes requests/sessions, correlation indices, rules, captured forwarding profiles without secrets, response representations, privacy policy/mappings, provider settings, replay records/keys and tool results/spans.
 
+v3 还保存独立 Run 证据、每次 Attempt 的结果及独立出站文件引用。记录策略覆盖外部 Run 标签、尝试 URL/错误及出站快照；原文不保留时也不能在私有 Run/转发头中留下原值。活动尝试恢复为 interrupted，不伪造结束时间，也不补发。旧历史未记录的事实保持未知。API 和迁移细节见 [四层调用契约](call-layers.md)。
+
 Ordinary changes trigger an approximately 200 ms coalesced flush; normal shutdown flushes. Abrupt termination can lose recent ordinary metadata not yet flushed. New replay registrations are a synchronous boundary: the record, fingerprint and idempotency key must be committed before execution starts. A failed registration returns 503 and sends no upstream request. Restoring a running/pending request produces `status:error`, HTTP 503 and an explicit restart interruption message, with unknown metrics. Pending interception reason becomes `gateway_restarted`. Saved running replays likewise become errors. Neither restore nor browsing automatically executes anything.
 
 Persisted replay idempotency keys continue to suppress duplicate actions. The registration barrier prevents an accepted persistent replay from losing its key in the ordinary background-flush window. It does not guarantee exactly-once completion: a crash after registration but before dispatch can leave an interrupted action that was never sent, and a crash after sending can leave its final result unknown. Memory-only mode remains non-durable. Client/network libraries may also retry their own requests.
@@ -49,7 +51,7 @@ The store restores in-memory indices from the saved snapshot; history queries cu
 
 ## History API and cleanup
 
-`GET /api/history` supports `q` (Trace/Response ID, summary, model, path and error), exact `model` / `status` / `session_id` filters, `limit=1…200` (default 50), and an offset-style `cursor`. Response: `{items,total,next_cursor,storage}`, newest first. This cursor is not a stable snapshot under concurrent inserts. `storage` includes persistence state, last save and any save error.
+`GET /api/history` supports `q` (Trace/Response/Run ID, visible Run label, summary, model, path and error), exact `model` / `status` / `session_id` / `run_id` filters, `limit=1…200` (default 50), and an offset-style `cursor`. Response: `{items,total,next_cursor,storage}`, newest first. This cursor is not a stable snapshot under concurrent inserts. `storage` includes persistence state, last save and any save error.
 
 `GET /api/history/{trace}` returns the authoritative log. `DELETE /api/history/{trace}` removes one terminal record and its owned request/response files; active records return 409.
 
@@ -58,6 +60,8 @@ The store restores in-memory indices from the saved snapshot; history queries cu
 Deleting a parent retains the surviving child's reference and sets `correlation.warning:deleted_parent`. Indices/empty sessions are pruned. Cleanup forgets a privacy namespace only when no surviving record references it. This protects same-session survivors, active records, moved captures and legacy data; deleting one conversation cannot erase another conversation's restoration data. Mappings have namespace-level lifetime, so deleting one trace does not erase individual mappings still owned by a surviving namespace. Cleanup flushes metadata before deleting owned files and checkpoints WAL. It does not delete arbitrary external paths or promise forensic erasure of filesystem backups/log rotation.
 
 Replay provenance/idempotency records remain separate; deleting a model record does not cause a replay to execute again. Existing rotated structured logs are separate from indexed history cleanup.
+
+清理同时收集各次 Attempt 的请求文件；同一文件被兼容 outgoing 或其他存活记录引用时保留。Run 汇总从存活记录派生，不留下空任务或沿用已删除请求的权限。
 
 ## Structured tool observations
 

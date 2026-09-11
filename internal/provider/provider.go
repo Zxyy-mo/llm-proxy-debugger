@@ -13,15 +13,17 @@ import (
 )
 
 type Provider struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	BaseURL    string `json:"base_url"`
-	Protocol   string `json:"protocol"` // passthrough or openai (explicit conversion)
-	KeyEnv     string `json:"key_env,omitempty"`
-	AuthHeader string `json:"auth_header,omitempty"`
-	AuthScheme string `json:"auth_scheme,omitempty"`
-	History    bool   `json:"history"`
-	WebSocket  bool   `json:"websocket"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	BaseURL      string       `json:"base_url"`
+	Protocol     string       `json:"protocol"` // passthrough 原生透传；openai 显式转为 Chat Completions。
+	Profile      Profile      `json:"profile,omitempty"`
+	Capabilities Capabilities `json:"capabilities,omitzero"`
+	KeyEnv       string       `json:"key_env,omitempty"`
+	AuthHeader   string       `json:"auth_header,omitempty"`
+	AuthScheme   string       `json:"auth_scheme,omitempty"`
+	History      bool         `json:"history"`
+	WebSocket    bool         `json:"websocket"`
 }
 type Route struct {
 	ID          string   `json:"id"`
@@ -57,6 +59,8 @@ func (m *Manager) Snapshot() Config {
 	_ = json.Unmarshal(raw, &result)
 	return result
 }
+
+// Validate 检查可持久化的配置；预设名称只用于接入提示，不能替代实例能力声明。
 func Validate(config Config) error {
 	if len(config.Providers) > 64 || len(config.Routes) > 256 {
 		return fmt.Errorf("最多允许 64 个 Provider 和 256 条路由")
@@ -72,6 +76,9 @@ func Validate(config Config) error {
 		}
 		if p.Protocol != "passthrough" && p.Protocol != "openai" {
 			return fmt.Errorf("protocol must be passthrough or openai")
+		}
+		if err := p.validateCapabilities(); err != nil {
+			return err
 		}
 		if p.KeyEnv != "" && !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(p.KeyEnv) {
 			return fmt.Errorf("invalid key environment variable")
@@ -111,6 +118,8 @@ func Validate(config Config) error {
 	}
 	return nil
 }
+
+// Set 校验并复制配置，使正在执行的请求继续使用原来选择的不可变快照。
 func (m *Manager) Set(config Config) error {
 	if err := Validate(config); err != nil {
 		return err
@@ -139,6 +148,8 @@ func (m *Manager) Get(id string) (Provider, bool) {
 	}
 	return Provider{}, false
 }
+
+// Select 以优先级和原有列表顺序匹配模型；别名与备用上游在请求进入时一起固定。
 func (m *Manager) Select(model string) Selection {
 	if model == "" {
 		return Selection{}
@@ -179,6 +190,7 @@ func (m *Manager) Select(model string) Selection {
 	return Selection{}
 }
 
+// Authorize 仅在配置环境变量时替换客户端鉴权；空配置保留原生透传语义。
 func (p Provider) Authorize(header http.Header) error {
 	if p.KeyEnv == "" {
 		return nil
@@ -190,6 +202,7 @@ func (p Provider) Authorize(header http.Header) error {
 	return p.AuthorizeKey(header, key)
 }
 
+// AuthorizeKey 使用单一凭证来源替换所有受支持的鉴权头，避免混发客户端和上游密钥。
 func (p Provider) AuthorizeKey(header http.Header, key string) error {
 	if strings.ContainsAny(key, "\r\n\x00") {
 		return fmt.Errorf("invalid provider credential")
@@ -211,8 +224,7 @@ func (p Provider) AuthorizeKey(header http.Header, key string) error {
 	return nil
 }
 
-// JoinPath accepts origins or /v1 base URLs, without accidentally duplicating
-// the standard API prefix. Other prefixes retain their literal mount behavior.
+// JoinPath 兼容 origin、/v1 和自定义挂载路径；仅去重字面量 /v1 前缀。
 func JoinPath(base, path string) string {
 	base = strings.TrimSuffix(base, "/")
 	if base == "" {
@@ -227,8 +239,7 @@ func JoinPath(base, path string) string {
 	return base + "/" + strings.TrimPrefix(path, "/")
 }
 
-// JoinURLPath joins escaped paths first so an encoded slash remains part of
-// an ID or mount segment. Only a literal /v1 API prefix is deduplicated.
+// JoinURLPath 先拼接转义路径，保证编码斜线仍属于原 ID 或挂载段，而不是目录分隔符。
 func JoinURLPath(base, request *url.URL) (path, rawPath string) {
 	rawPath = JoinPath(base.EscapedPath(), request.EscapedPath())
 	path, _ = url.PathUnescape(rawPath)
